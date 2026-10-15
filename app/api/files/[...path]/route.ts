@@ -427,7 +427,7 @@ export async function GET(
 ) {
   try {
     const { path: segments } = await params;
-    const filePath = filePathFromSegments(segments);
+    let filePath = filePathFromSegments(segments);
     const rawType = request.nextUrl.searchParams.get("type") ?? "list";
     const type = parseFileRequestType(rawType);
     if (!type) {
@@ -436,9 +436,24 @@ export async function GET(
     const sessionId = request.nextUrl.searchParams.get("sessionId");
 
     const allowedRoots = await getAllowedFileRoots();
+    // Normalize line/range suffix and resolve against allowed roots if relative
+    const cleanPath = filePath.replace(/(?<=.[a-zA-Z0-9_\-\.]):[a-zA-Z0-9_\-\+,:]+$/, "");
+    const candidatePaths = [cleanPath];
+    const relativePath = cleanPath.replace(/^[\\/]+/, "");
+    for (const root of allowedRoots) {
+      candidatePaths.push(path.resolve(root, relativePath));
+    }
+    for (const cand of candidatePaths) {
+      try {
+        const s = fs.statSync(cand);
+        if (s.isFile() || s.isDirectory()) {
+          filePath = cand;
+          break;
+        }
+      } catch {}
+    }
+
     const allowedByRoot = isFilePathAllowed(filePath, allowedRoots);
-    // The omp-generated temp image exemption is a narrow READ-only escape
-    // hatch: download/meta/watch/list for such paths still go through the
     // normal root checks and 403.
     const allowedByOmpImage = type === "read" && isOmpGeneratedImagePath(filePath);
     const allowedBySessionReference =

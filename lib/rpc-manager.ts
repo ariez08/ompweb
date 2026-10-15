@@ -42,7 +42,7 @@ const READY_TIMEOUT_MS = 120_000;
 const MCP_LIST_TIMEOUT_MS = 15_000;
 /** State reads drive UI reconciliation and must never leave a stale spinner
  * waiting on a child that has stopped responding. */
-const GET_STATE_TIMEOUT_MS = 5_000;
+const GET_STATE_TIMEOUT_MS = 60_000;
 /** Prompt execution continues over frames; this cap applies only to accepting
  * the prompt command, not to model generation. */
 const PROMPT_ACK_TIMEOUT_MS = 30_000;
@@ -1060,8 +1060,13 @@ export class AgentSessionWrapper {
           return this.buildWebState(state);
         } catch (error) {
           if (error instanceof RpcCommandTimeoutError || (error instanceof Error && error.name === "RpcCommandTimeoutError")) {
-            await this.destroyAndWait();
-            throw new WebRpcError("The OMP session stopped responding and was reset.", "session_unresponsive");
+            return this.buildWebState({
+              sessionId: this._sessionId,
+              sessionFile: this._sessionFile,
+              sessionName: this._sessionName,
+              isStreaming: this.streaming,
+              isCompacting: this.compacting,
+            } as RpcSessionState);
           }
           throw error;
         }

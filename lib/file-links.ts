@@ -14,7 +14,8 @@ function normalizeFilePathSlashes(filePath: string): string {
 }
 
 function stripLineSuffix(filePath: string): string {
-  return filePath.replace(/:\d+(?::\d+)?$/, "");
+  // Strip line and range suffixes like :50-200, :10, :raw, :conflicts, :12:34
+  return filePath.replace(/(?<=.[a-zA-Z0-9_\-\.]):[a-zA-Z0-9_\-\+,:]+$/, "");
 }
 
 function normalizeLocalPath(filePath: string): string {
