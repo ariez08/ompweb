@@ -98,47 +98,86 @@ export function ProfileSwitcher({
         display: "flex",
         alignItems: "center",
         gap: 8,
-        height: 36,
+        height: 32,
         padding: "0 12px",
-        color: "var(--text-muted)",
-        fontSize: 12,
+        flexShrink: 0,
       }}
     >
-      <label htmlFor="omp-profile-select" style={{ flexShrink: 0 }}>
+      <label
+        htmlFor="omp-profile-select"
+        style={{ flexShrink: 0, fontSize: 11, color: "var(--text-dim)" }}
+      >
         {t("profile.label")}
       </label>
-      <select
-        id="omp-profile-select"
-        disabled={busy}
-        value={payload.current}
-        onChange={(event) => void switchTo(event.target.value)}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          height: 24,
-          background: "none",
-          border: "none",
-          borderBottom: "1px solid var(--border)",
-          color: "var(--text)",
-          fontSize: 12,
-          cursor: busy ? "default" : "pointer",
-        }}
-      >
-        {payload.profiles.map((profile) => {
-          const counts =
-            profile.sessionCount === undefined
-              ? ""
-              : ` · ${profile.sessionCount} ${t("profile.sessions")} · ${profile.modelCount ?? 0} ${t("profile.models")}`;
-          return (
-            <option key={profile.profile} value={profile.profile}>
-              {profile.profile}
-              {counts}
-            </option>
-          );
-        })}
-      </select>
-      {busy && <LoaderCircle size={12} className="animate-spin" aria-hidden="true" />}
-      {error ? <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{error}</span> : null}
+      <div style={{ position: "relative", flex: 1, minWidth: 0, display: "flex", alignItems: "center" }}>
+        <select
+          id="omp-profile-select"
+          disabled={busy}
+          value={payload.current}
+          onChange={(event) => void switchTo(event.target.value)}
+          style={{
+            width: "100%",
+            minWidth: 0,
+            height: 24,
+            padding: "0 24px 0 8px",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            background: "var(--bg-panel)",
+            color: "var(--text)",
+            fontSize: 12,
+            fontFamily: "inherit",
+            cursor: busy ? "default" : "pointer",
+            appearance: "none",
+            WebkitAppearance: "none",
+            opacity: busy ? 0.6 : 1,
+            outline: "none",
+            // Native popups follow the active theme instead of staying white
+            // under a dark theme.
+            colorScheme: "dark light",
+            textOverflow: "ellipsis",
+          }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; }}
+        >
+          {payload.profiles.map((profile) => {
+            const counts =
+              profile.sessionCount === undefined
+                ? ""
+                : ` · ${profile.sessionCount} ${t("profile.sessions")} · ${profile.modelCount ?? 0} ${t("profile.models")}`;
+            return (
+              <option key={profile.profile} value={profile.profile} style={{ background: "var(--bg-panel)", color: "var(--text)" }}>
+                {profile.profile}
+                {counts}
+              </option>
+            );
+          })}
+        </select>
+        {/* currentColor chevron (same as the Select primitive in ui/field):
+            a baked gray data-URI would not follow theme switches. */}
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+          style={{ position: "absolute", right: 8, color: "var(--text-dim)", pointerEvents: "none" }}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </div>
+      {busy && <LoaderCircle size={12} className="animate-spin" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }} />}
+      {error ? (
+        <span
+          title={error}
+          style={{ flexShrink: 1, minWidth: 0, maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: "var(--status-error)" }}
+        >
+          {error}
+        </span>
+      ) : null}
     </div>
   );
 }
