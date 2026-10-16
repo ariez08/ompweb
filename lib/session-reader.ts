@@ -450,26 +450,24 @@ export function getTodoPhasesFromEntries(entries: SessionEntry[], leafId?: strin
   if (leafId === null || entries.length === 0) return [];
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
   let entry = leafId ? byId.get(leafId) : entries[entries.length - 1];
-  const path: SessionEntry[] = [];
   const seen = new Set<string>();
+
+  // Walk leaf -> root: the first valid snapshot along the path is the latest one.
   while (entry && !seen.has(entry.id)) {
     seen.add(entry.id);
-    path.push(entry);
-    entry = entry.parentId ? byId.get(entry.parentId) : undefined;
-  }
-
-  for (let index = path.length - 1; index >= 0; index--) {
-    const current = path[index];
+    const current = entry;
     if (current.type === "custom" && current.customType === "user_todo_edit") {
       const phases = isRecord(current.data) ? parseTodoPhases(current.data.phases) : null;
       if (phases) return phases;
     }
     if (current.type === "message" && isRecord(current.message) && current.message.role === "toolResult") {
       const message = current.message as { role?: string; toolName?: string; isError?: boolean; details?: unknown };
-      if (message.toolName !== "todo" || message.isError) continue;
-      const phases = isRecord(message.details) ? parseTodoPhases(message.details.phases) : null;
-      if (phases) return phases;
+      if (message.toolName === "todo" && !message.isError) {
+        const phases = isRecord(message.details) ? parseTodoPhases(message.details.phases) : null;
+        if (phases) return phases;
+      }
     }
+    entry = entry.parentId ? byId.get(entry.parentId) : undefined;
   }
   return [];
 }

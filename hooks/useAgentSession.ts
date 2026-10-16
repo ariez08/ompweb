@@ -3320,15 +3320,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             // external writes). Show it as running and let the session-file
             // watcher reload the transcript as the file grows.
             externalRunningRef.current = true;
-            agentRunningRef.current = true;
-            setAgentRunning(true);
-            setAgentPhase({ kind: "running_command" });
-            dispatch({ type: "start" });
             if (agentState.cliLocked && agentState.cliLockPid) {
               setCliLockPid(agentState.cliLockPid);
               addNotice({ type: "warning", message: translate("agentSession.lockedByCliNotice", { pid: String(agentState.cliLockPid) }) });
             } else {
               setCliLockPid(null);
+              agentRunningRef.current = true;
+              setAgentRunning(true);
+              setAgentPhase({ kind: "running_command" });
+              dispatch({ type: "start" });
               addNotice({ type: "info", message: translate("agentSession.externallyRunning") });
             }
             // When the external CLI finishes, the file stops changing and the
