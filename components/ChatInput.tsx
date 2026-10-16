@@ -2352,7 +2352,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   const maxH = Math.max(120, Math.min(modelDropdownRect.top - 8, viewportHeight * 0.6));
                   const panelPos: React.CSSProperties = isMobile
                     ? { left: 8, right: 8, maxWidth: "calc(100vw - 16px)" }
-                    : { left: modelDropdownRect.left, width: "max-content", minWidth: modelDropdownRect.width, maxWidth: "calc(100vw - 16px)" };
+                    : { left: modelDropdownRect.left, width: "max-content", minWidth: Math.max(modelDropdownRect.width, 360), maxWidth: "calc(100vw - 16px)" };
                   return (
                     <div ref={modelDropdownPanelRef} className="picker-panel" style={{
                       position: "fixed",
@@ -2405,11 +2405,15 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                                   data-active={isActive}
                                   key={`${opt.provider}:${opt.modelId}`}
                                   onClick={() => { setModelDropdownOpen(false); if (!isActive || isAutoModelSelection) onModelChange(opt.provider, opt.modelId); }}
+                                  title={`${opt.name} (${opt.modelId})`}
                                 >
                                   <span className="picker-check">
                                     {isActive && <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>}
                                   </span>
                                   <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{opt.name}</span>
+                                  {opt.modelId !== opt.name && (
+                                    <span className="picker-row-meta" style={{ fontFamily: "var(--font-mono)" }}>{opt.modelId}</span>
+                                  )}
                                 </button>
                               );
                             })}
