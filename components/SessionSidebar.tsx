@@ -18,6 +18,7 @@ import { comparableProjectPath } from "@/lib/comparable-path";
 import { Archive, Check, ChevronDown, ChevronRight, FileUp, Folder, FolderSearch, GitBranch, LoaderCircle, MoreHorizontal, PanelsTopLeft, Play, Plus, RefreshCw, Rocket, Search, Settings2, SlidersHorizontal, Smartphone, Trash2, Upload, Wrench } from "lucide-react";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
 import { UsageSidebarPanel } from "./UsageSidebarPanel";
+import { ProfileSwitcher } from "./ProfileSwitcher";
 
 declare global {
   interface Window {
@@ -60,6 +61,27 @@ interface Props {
   /** Run a project quick script inside the terminal drawer instead of the
    *  silent wait/toast path (AppShell owns the TerminalPanel). */
   onRunScriptInTerminal?: (projectPath: string, command: string) => void;
+  /** Fired after the profile cookie changed; the parent must drop any state
+   *  (open session, transcript) bound to the previous profile. */
+  onProfileChange?: (profile: string) => void;
+}
+
+/** One profile's slice of the `GET /api/sessions?all=1` aggregate (wave-2
+ * contract D-3). `profile` is the canonical profile key — the same string the
+ * running-status SSE frames carry, so buckets and frames cross-check. */
+interface ProfileSessionBucket {
+  profile: string;
+  isDefault: boolean;
+  sessions: SessionInfo[];
+  runningIds: string[];
+}
+
+/** Flattened read-only row for a session owned by another profile. */
+interface ForeignSessionRowData {
+  id: string;
+  title: string;
+  modified: string | null;
+  running: boolean;
 }
 
 interface WorktreeEntry {
@@ -757,8 +779,8 @@ function OmpWebTitle() {
     </button>
   );
 }
-export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, explorerRefreshing, onExplorerRefreshDone, onAtMention, onAtMentions, onOpenSettings, onOpenRemote, onOpenArchive, updateAvailable, onRunScriptInTerminal }: Props) {
-  const { t } = useI18n();
+export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, explorerRefreshing, onExplorerRefreshDone, onAtMention, onAtMentions, onOpenSettings, onOpenRemote, onOpenArchive, updateAvailable, onRunScriptInTerminal, onProfileChange }: Props) {
+  const { t, locale } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -797,6 +819,15 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
+  // The profile this browser is viewing (canonical key from /api/profiles or
+  // a successful switch). Running-status frames naming another profile are
+  // discarded against it; the ref is read synchronously in the SSE handler
+  // so a switch takes effect before React commits the state change.
+  const [viewProfile, setViewProfile] = useState<string | null>(null);
+  const viewProfileRef = useRef<string | null>(null);
+  // `?all=1` aggregate buckets for the read-only cross-profile section (D-3);
+  // null until the first aggregate response lands.
+  const [profileBuckets, setProfileBuckets] = useState<ProfileSessionBucket[] | null>(null);
   // Relative session times must age while the sidebar stays open; one shared
   // minute clock avoids a timer per session row.
   const [relativeTimeNow, setRelativeTimeNow] = useState(() => Date.now());
@@ -822,13 +853,21 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
       if (showLoading) setLoading(true);
       const headers: Record<string, string> = {};
       if (sessionsEtagRef.current) headers["If-None-Match"] = sessionsEtagRef.current;
-      const res = await fetch("/api/sessions", { headers, signal: controller.signal });
+      // ?all=1 keeps the legacy top-level fields byte-identical and adds
+      // `byProfile`; the ETag the server returns already covers the whole
+      // body, so conditional GETs still short-circuit when nothing moved.
+      const res = await fetch("/api/sessions?all=1", { headers, signal: controller.signal });
       if (res.status === 304) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const etag = res.headers.get("ETag");
       if (etag) sessionsEtagRef.current = etag;
-      const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[] };
+      const data = await res.json() as {
+        sessions: SessionInfo[];
+        runningSessionIds?: string[];
+        byProfile?: ProfileSessionBucket[];
+      };
       setAllSessions(data.sessions);
+      setProfileBuckets(Array.isArray(data.byProfile) ? data.byProfile : null);
       // Treat the fetched running set as an initial fallback only. Once SSE is
       // live it owns this state, so a slow fetch can't revive a stale snapshot.
       if (!sseAuthoritativeRef.current) {
@@ -935,6 +974,30 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
     }
   }, []);
 
+  // Called once /api/profiles resolves (or ProfileSwitcher mounts): pin the
+  // frame-filter key before any SSE frame can arrive.
+  const handleProfileReady = useCallback((profile: string) => {
+    viewProfileRef.current = profile;
+    setViewProfile(profile);
+  }, []);
+
+  // A profile switch invalidates every piece of client state derived from the
+  // previous profile's list: the ETag (would 304 us into the old body), the
+  // running set, the placeholder timestamps, and the SSE-authoritative latch.
+  const handleProfileSwitched = useCallback((profile: string) => {
+    viewProfileRef.current = profile;
+    setViewProfile(profile);
+    sessionsEtagRef.current = null;
+    sseAuthoritativeRef.current = false;
+    placeholderTsRef.current.clear();
+    externalExpiryRef.current.forEach((timer) => clearTimeout(timer));
+    externalExpiryRef.current.clear();
+    setRunningSessionIds(new Set());
+    setProfileBuckets(null);
+    onProfileChange?.(profile);
+    void loadSessions(true);
+  }, [loadSessions, onProfileChange]);
+
   useEffect(() => {
     // Live running status and session-list invalidations arrive via SSE; the
     // sidebar never has to poll while an agent is working.
@@ -944,11 +1007,20 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
       try {
         const data = JSON.parse(e.data) as {
           type?: string;
+          profile?: string;
           runningSessionIds?: string[];
           refreshSessionList?: boolean;
           sessionIds?: string[];
           externallyRunning?: string[];
         };
+        // Cross-profile guard: the stream is server-scoped per cookie today,
+        // but frames may carry a `profile` key (wave-2 registry dimension).
+        // Until the server filters by subscriber profile, drop anything that
+        // names a profile other than the one this browser is viewing. Frames
+        // without `profile` come from the pre-multi-profile server path —
+        // keep them (they cannot be attributed elsewhere).
+        const currentProfile = viewProfileRef.current;
+        if (data.profile && currentProfile && data.profile !== currentProfile) return;
         if (data.type === "running") {
           sseAuthoritativeRef.current = true;
           setRunningSessionIds(new Set(data.runningSessionIds ?? []));
@@ -1294,6 +1366,32 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
     for (const { project, sessions } of visibleProjectEntries) m.set(project.path, buildSessionTree(sessions));
     return m;
   }, [visibleProjectEntries]);
+
+  // ---- Cross-profile aggregate (read-only, decision D-3) ---------------------
+  // Buckets for every profile EXCEPT the one being viewed. Suppressed until the
+  // viewing profile is known: without it the requesting profile's own bucket is
+  // indistinguishable from the list above and would render as a duplicate.
+  const foreignGroups = useMemo(() => {
+    if (!viewProfile || !profileBuckets) return [];
+    const q = deferredSearchQuery.trim().toLowerCase();
+    const groups: { profile: string; isDefault: boolean; rows: ForeignSessionRowData[]; total: number }[] = [];
+    for (const bucket of profileBuckets) {
+      if (bucket.profile === viewProfile) continue;
+      const running = new Set(bucket.runningIds ?? []);
+      let rows: ForeignSessionRowData[] = bucket.sessions.map((session) => ({
+        id: session.id,
+        title: session.name || session.firstMessage.slice(0, 50) || session.id.slice(0, 12),
+        modified: session.modified,
+        running: running.has(session.id),
+      }));
+      if (runningOnly) rows = rows.filter((row) => row.running);
+      if (q) rows = rows.filter((row) => row.title.toLowerCase().includes(q));
+      if (rows.length === 0) continue;
+      rows.sort((a, b) => (b.modified ?? "").localeCompare(a.modified ?? ""));
+      groups.push({ profile: bucket.profile, isDefault: bucket.isDefault, rows, total: rows.length });
+    }
+    return groups;
+  }, [viewProfile, profileBuckets, runningOnly, deferredSearchQuery]);
 
   // Drop persisted expansion keys whose project no longer exists (removed or
   // vanished), so the storage stays bounded to real projects. Only runs after
@@ -2019,6 +2117,51 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
               />
             );
           })}
+
+          {/* Cross-profile sessions (decision D-3): visible, never openable.
+              Rows carry no handler on purpose — opening one needs the target
+              profile's cookie, so the honest action is to switch first. */}
+          {foreignGroups.length > 0 && (
+            <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid var(--border)" }}>
+              {foreignGroups.map((group) => (
+                <div key={group.profile} style={{ marginBottom: 4 }}>
+                  <div
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      padding: "2px 4px", fontSize: 11, color: "var(--text-dim)",
+                    }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {group.profile}
+                    </span>
+                    <span>{group.total}</span>
+                  </div>
+                  {group.rows.map((row) => (
+                    <div
+                      key={row.id}
+                      title={t("profile.readOnly")}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 6,
+                        padding: "3px 4px 3px 14px", fontSize: 12, color: "var(--text-muted)",
+                      }}
+                    >
+                      {row.running && (
+                        <span
+                          style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--status-success)", flexShrink: 0 }}
+                        />
+                      )}
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {row.title}
+                      </span>
+                      <span style={{ flexShrink: 0, fontSize: 11, color: "var(--text-dim)" }}>
+                        {formatRelativeTime(row.modified ?? "", locale, relativeTimeNow) ?? ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
       {/* File Explorer section */}
@@ -2157,6 +2300,7 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
 
       {/* Pinned footer: Usage panel + Settings */}
       <UsageSidebarPanel />
+      <ProfileSwitcher onProfileChange={handleProfileSwitched} onProfileReady={handleProfileReady} />
       <div style={{ borderTop: "1px solid var(--border)", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center" }}>
         <button

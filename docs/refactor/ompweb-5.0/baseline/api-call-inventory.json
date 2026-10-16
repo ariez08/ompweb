@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-09-05T04:55:47.155Z",
+  "generatedAt": "2026-10-15T07:13:16.768Z",
   "totals": {
-    "files": 33,
-    "calls": 155,
-    "http": 147,
+    "files": 34,
+    "calls": 157,
+    "http": 149,
     "sse": 8,
     "read": 73,
-    "write": 82
+    "write": 84
   },
   "domains": {
     "pair": 9,
@@ -33,6 +33,8 @@
     "providers": 1,
     "proxy": 2,
     "plugins": 3,
+    "profiles": 1,
+    "profile": 1,
     "scripts": 4,
     "projects": 5,
     "home": 1,
@@ -320,7 +322,7 @@
           "stream": false
         },
         {
-          "line": 1861,
+          "line": 1867,
           "kind": "http",
           "method": "POST",
           "endpoint": "/api/omp-update",
@@ -421,7 +423,7 @@
           "stream": false
         },
         {
-          "line": 320,
+          "line": 332,
           "kind": "http",
           "method": "POST",
           "endpoint": "/api/reveal",
@@ -430,7 +432,7 @@
           "stream": false
         },
         {
-          "line": 679,
+          "line": 696,
           "kind": "http",
           "method": "POST",
           "endpoint": "/api/files/{param}",
@@ -846,6 +848,29 @@
       ]
     },
     {
+      "file": "components/ProfileSwitcher.tsx",
+      "calls": [
+        {
+          "line": 36,
+          "kind": "http",
+          "method": "PUT",
+          "endpoint": "/api/profiles",
+          "domain": "profiles",
+          "rw": "write",
+          "stream": false
+        },
+        {
+          "line": 51,
+          "kind": "http",
+          "method": "PUT",
+          "endpoint": "/api/profile",
+          "domain": "profile",
+          "rw": "write",
+          "stream": false
+        }
+      ]
+    },
+    {
       "file": "components/RemoteAccessSetting.tsx",
       "calls": [
         {
@@ -917,7 +942,7 @@
       "file": "components/SessionSidebar.tsx",
       "calls": [
         {
-          "line": 243,
+          "line": 244,
           "kind": "http",
           "method": "GET",
           "endpoint": "/api/scripts",
@@ -926,7 +951,7 @@
           "stream": false
         },
         {
-          "line": 264,
+          "line": 265,
           "kind": "http",
           "method": "POST",
           "endpoint": "/api/scripts/run",
@@ -935,7 +960,7 @@
           "stream": false
         },
         {
-          "line": 294,
+          "line": 295,
           "kind": "http",
           "method": "PUT",
           "endpoint": "/api/scripts",
@@ -944,7 +969,7 @@
           "stream": false
         },
         {
-          "line": 318,
+          "line": 319,
           "kind": "http",
           "method": "PUT",
           "endpoint": "/api/scripts",
@@ -953,7 +978,7 @@
           "stream": false
         },
         {
-          "line": 825,
+          "line": 826,
           "kind": "http",
           "method": "GET",
           "endpoint": "/api/sessions",
@@ -962,7 +987,7 @@
           "stream": false
         },
         {
-          "line": 867,
+          "line": 868,
           "kind": "http",
           "method": "GET",
           "endpoint": "/api/projects",
@@ -971,7 +996,7 @@
           "stream": false
         },
         {
-          "line": 941,
+          "line": 942,
           "kind": "sse",
           "method": "GET",
           "endpoint": "/api/agent/running/events",
@@ -980,7 +1005,7 @@
           "stream": true
         },
         {
-          "line": 1015,
+          "line": 1016,
           "kind": "http",
           "method": "GET",
           "endpoint": "/api/home",
@@ -989,7 +1014,7 @@
           "stream": false
         },
         {
-          "line": 1122,
+          "line": 1123,
           "kind": "http",
           "method": "GET",
           "endpoint": "/api/worktrees",
@@ -998,7 +1023,7 @@
           "stream": false
         },
         {
-          "line": 1426,
+          "line": 1427,
           "kind": "http",
           "method": "POST",
           "endpoint": "/api/projects",
@@ -1007,7 +1032,7 @@
           "stream": false
         },
         {
-          "line": 1450,
+          "line": 1451,
           "kind": "http",
           "method": "PATCH",
           "endpoint": "/api/projects",
@@ -1016,7 +1041,7 @@
           "stream": false
         },
         {
-          "line": 1462,
+          "line": 1463,
           "kind": "http",
           "method": "PATCH",
           "endpoint": "/api/projects",
@@ -1025,7 +1050,7 @@
           "stream": false
         },
         {
-          "line": 1504,
+          "line": 1505,
           "kind": "http",
           "method": "DELETE",
           "endpoint": "/api/projects",
@@ -1034,7 +1059,7 @@
           "stream": false
         },
         {
-          "line": 1539,
+          "line": 1540,
           "kind": "http",
           "method": "POST",
           "endpoint": "/api/worktrees",
@@ -1043,7 +1068,7 @@
           "stream": false
         },
         {
-          "line": 1581,
+          "line": 1582,
           "kind": "http",
           "method": "DELETE",
           "endpoint": "/api/worktrees",
@@ -1052,7 +1077,7 @@
           "stream": false
         },
         {
-          "line": 1646,
+          "line": 1647,
           "kind": "http",
           "method": "POST",
           "endpoint": "/api/sessions/import",
@@ -1061,7 +1086,7 @@
           "stream": false
         },
         {
-          "line": 2334,
+          "line": 2336,
           "kind": "http",
           "method": "POST",
           "endpoint": "/api/reveal",
@@ -1070,7 +1095,7 @@
           "stream": false
         },
         {
-          "line": 3203,
+          "line": 3205,
           "kind": "http",
           "method": "PATCH",
           "endpoint": "/api/sessions/{param}",
@@ -1079,7 +1104,7 @@
           "stream": false
         },
         {
-          "line": 3219,
+          "line": 3221,
           "kind": "http",
           "method": "POST",
           "endpoint": "/api/sessions/{param}/archive",
@@ -1088,7 +1113,7 @@
           "stream": false
         },
         {
-          "line": 3232,
+          "line": 3234,
           "kind": "http",
           "method": "DELETE",
           "endpoint": "/api/sessions/{param}",
@@ -1362,7 +1387,7 @@
           "stream": false
         },
         {
-          "line": 71,
+          "line": 73,
           "kind": "http",
           "method": "GET",
           "endpoint": "/api/usage/stats",

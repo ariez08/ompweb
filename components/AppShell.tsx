@@ -863,6 +863,23 @@ export function AppShell() {
     router.replace("/", { scroll: false });
   }, [router, isMobile]);
 
+  // A profile switch orphans whatever the pane was showing: the open session id
+  // belongs to the previous profile's store, so resolving it against the new
+  // cookie would 404. Same reset as handleNewSession, minus the cwd — the next
+  // project the user picks comes from the new profile's registry.
+  const handleProfileChange = useCallback(() => {
+    setSelectedSession(null);
+    setNewSessionCwd(null);
+    setInitialSessionRestored(true);
+    setSessionKey((k) => k + 1);
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setSystemPrompt(null);
+    setSystemPromptLoading(false);
+    setActiveTopPanel(null);
+    router.replace("/", { scroll: false });
+  }, [router]);
+
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
@@ -1131,6 +1148,7 @@ export function AppShell() {
         onOpenArchive={() => setArchiveBrowserOpen(true)}
         updateAvailable={appUpdateAvailable || ompUpdateAvailable}
         onRunScriptInTerminal={(projectPath, command) => openTerminalWithCommand(projectPath, command)}
+        onProfileChange={handleProfileChange}
       />
     </>
   );
