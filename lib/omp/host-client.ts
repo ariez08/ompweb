@@ -9,7 +9,8 @@
  * 对应域的 authority（backend-ownership.yaml 如实标注），不伪造边界。
  */
 import { resolveHostBin, resolveModuleDir } from "./host-bin";
-import { cleanupOrphanRustHosts, hostRequest, hostManager, listOrphanRustHosts } from "./rust-rpc-process";
+import { defaultProfileContext, type ProfileContext } from "./profile-context";
+import { cleanupOrphanRustHosts, hostFor, hostRequest, listOrphanRustHosts } from "./rust-rpc-process";
 import type { GitStatusResponse } from "../git-types";
 
 /** Session projection contract (doc 15 R7/R10 — lives with the domain
@@ -48,51 +49,51 @@ const MODULE_DIR = resolveModuleDir(import.meta.url);
 
 export interface HostClientSurface {
   sessions: {
-    scan(root: string): Promise<RustSessionProjection[]>;
-    rename(root: string, path: string, title: string): Promise<void>;
-    delete(root: string, path: string): Promise<void>;
+    scan(root: string, ctx?: ProfileContext): Promise<RustSessionProjection[]>;
+    rename(root: string, path: string, title: string, ctx?: ProfileContext): Promise<void>;
+    delete(root: string, path: string, ctx?: ProfileContext): Promise<void>;
   };
   journal: {
     /** Append one event to a stream; resolves the assigned seq number. */
-    append(stream: string, options?: JournalAppendOptions): Promise<number>;
+    append(stream: string, options?: JournalAppendOptions, ctx?: ProfileContext): Promise<number>;
     /** Sequence numbers persisted for a stream (tail oracle for resume). */
-    view(stream: string): Promise<number[]>;
+    view(stream: string, ctx?: ProfileContext): Promise<number[]>;
   };
   settings: {
     /** Raw schema object from `omp config list --json`; OMP remains authority. */
-    list(): Promise<Record<string, unknown>>;
-    path(): Promise<string | null>;
-    set(key: string, value: string): Promise<{ output: string }>;
-    reset(key: string): Promise<{ output: string }>;
+    list(ctx?: ProfileContext): Promise<Record<string, unknown>>;
+    path(ctx?: ProfileContext): Promise<string | null>;
+    set(key: string, value: string, ctx?: ProfileContext): Promise<{ output: string }>;
+    reset(key: string, ctx?: ProfileContext): Promise<{ output: string }>;
   };
   files: {
     /** Directory listing mirror of /api/files?type=list (doc 16 route 9). */
-    list(roots: string[], path: string): Promise<{ entries: Array<{ name: string; isDir: boolean }>; path: string }>;
+    list(roots: string[], path: string, ctx?: ProfileContext): Promise<{ entries: Array<{ name: string; isDir: boolean }>; path: string }>;
     /** Text-JSON read (<256 KiB) mirror of /api/files?type=read. */
-    read(roots: string[], path: string): Promise<{ content: string; language: string; size: number }>;
+    read(roots: string[], path: string, ctx?: ProfileContext): Promise<{ content: string; language: string; size: number }>;
     /** File metadata mirror of /api/files?type=meta. */
-    meta(roots: string[], path: string): Promise<{ size: number; language: string; mime: string; previewKind: string | null }>;
+    meta(roots: string[], path: string, ctx?: ProfileContext): Promise<{ size: number; language: string; mime: string; previewKind: string | null }>;
   };
   git: {
     /** Local git status mirror of getGitStatus (doc 16 route 10). */
-    status(roots: string[], cwd: string): Promise<GitStatusResponse>;
+    status(roots: string[], cwd: string, ctx?: ProfileContext): Promise<GitStatusResponse>;
     /** Branch list mirror of listGitBranches. */
-    branches(roots: string[], cwd: string): Promise<Array<{ name: string; current: boolean }>>;
+    branches(roots: string[], cwd: string, ctx?: ProfileContext): Promise<Array<{ name: string; current: boolean }>>;
     /** Branch checkout mirror of checkoutGitBranch. */
-    checkout(roots: string[], cwd: string, branch: string): Promise<{ branch: string }>;
+    checkout(roots: string[], cwd: string, branch: string, ctx?: ProfileContext): Promise<{ branch: string }>;
     /** Commit mirror of commitGitChanges (mutation authority). */
-    commit(roots: string[], cwd: string, message: string): Promise<{ hash: string; output: string }>;
+    commit(roots: string[], cwd: string, message: string, ctx?: ProfileContext): Promise<{ hash: string; output: string }>;
     /** Push mirror of pushGitChanges (mutation authority). */
-    push(roots: string[], cwd: string): Promise<{ branch: string; output: string }>;
+    push(roots: string[], cwd: string, ctx?: ProfileContext): Promise<{ branch: string; output: string }>;
     /** Single-file diff preview mirror of getGitFileDiff (read-only). */
-    diff(roots: string[], cwd: string, filePath: string): Promise<{ supported: boolean; status?: string; patch?: string }>;
+    diff(roots: string[], cwd: string, filePath: string, ctx?: ProfileContext): Promise<{ supported: boolean; status?: string; patch?: string }>;
   };
   commands: {
     /** Run a registry-resolved quick script (doc 16 route 12): wait mode
      * (60s cap, 20 KiB merged output) or detach (background + log file).
      * `envs` carries per-request env overrides (proxy vars) — the host's
      * inherited environment stays the base. */
-    run(roots: string[], cwd: string, command: string, detach: boolean, envs?: Record<string, string>): Promise<
+    run(roots: string[], cwd: string, command: string, detach: boolean, envs?: Record<string, string>, ctx?: ProfileContext): Promise<
       { mode: "wait"; exitCode: number | null; timedOut: boolean; output: string }
       | { mode: "detach"; pid: number; logPath: string }
     >;
@@ -100,60 +101,61 @@ export interface HostClientSurface {
   terminal: {
     /** Spawn an interactive shell PTY on the host (doc 16 route 8):
      * $SHELL/-i resolution, 80x24, TERM/COLORTERM/LANG/LC_ALL + proxy env. */
-    spawn(roots: string[], cwd: string, opts?: { cols?: number; rows?: number; env?: Record<string, string> }): Promise<{ id: string }>;
+    spawn(roots: string[], cwd: string, opts?: { cols?: number; rows?: number; env?: Record<string, string> }, ctx?: ProfileContext): Promise<{ id: string }>;
     /** Verbatim passthrough write to the PTY master. */
-    write(id: string, data: string): Promise<void>;
+    write(id: string, data: string, ctx?: ProfileContext): Promise<void>;
     /** Resize the PTY (cols >= 2, rows >= 1). */
-    resize(id: string, cols: number, rows: number): Promise<void>;
+    resize(id: string, cols: number, rows: number, ctx?: ProfileContext): Promise<void>;
     /** Kill the PTY shell; an exit event follows on the attach stream. */
-    kill(id: string): Promise<void>;
+    kill(id: string, ctx?: ProfileContext): Promise<void>;
     /** Attach a dedicated stream: history replay then live data frames. */
     attach(
       id: string,
       onEvent: (event: { type: "data"; data: string } | { type: "exit"; code: number | null }) => void,
+      ctx?: ProfileContext,
     ): Promise<{ detach: () => void; closed: Promise<void> }>;
   };
   device: {
-    issue(ttlMs?: number): Promise<{ token: string; expiresAt: number }>;
-    enroll(token: string, userAgent: string, mobile?: boolean, maxDevices?: number): Promise<{ id: string }>;
+    issue(ttlMs?: number, ctx?: ProfileContext): Promise<{ token: string; expiresAt: number }>;
+    enroll(token: string, userAgent: string, mobile?: boolean, maxDevices?: number, ctx?: ProfileContext): Promise<{ id: string }>;
     /** Cha-read the device's challenge-proof auth secret (loopback HTTP only). */
-    deviceSecret(id: string): Promise<string | null>;
-    touch(id: string): Promise<{ ok: boolean }>;
-    revoke(id: string): Promise<{ ok: boolean }>;
-    revokeAll(): Promise<{ ok: boolean }>;
-    list(offlineAfterMs?: number): Promise<Array<{ id: string; name: string; platform: string; pairedAt: number; lastActiveAt: number; online: boolean }>>;
+    deviceSecret(id: string, ctx?: ProfileContext): Promise<string | null>;
+    touch(id: string, ctx?: ProfileContext): Promise<{ ok: boolean }>;
+    revoke(id: string, ctx?: ProfileContext): Promise<{ ok: boolean }>;
+    revokeAll(ctx?: ProfileContext): Promise<{ ok: boolean }>;
+    list(offlineAfterMs?: number, ctx?: ProfileContext): Promise<Array<{ id: string; name: string; platform: string; pairedAt: number; lastActiveAt: number; online: boolean }>>;
   };
   host: {
     /** Binary resolution snapshot (doc 16 route 3). */
     status(): { mode: string; path: string; available: boolean };
     /** Kill orphaned idle hosts reparented to launchd/init (diagnostics repair). */
-    repair(): { stoppedOrphanHosts: number; orphanHostPids: number[] };
+    repair(ctx?: ProfileContext): { stoppedOrphanHosts: number; orphanHostPids: number[] };
     /** Inspect orphaned hosts without terminating anything. */
-    orphans(): number[];
+    orphans(ctx?: ProfileContext): number[];
   };
 }
 
 export const hostClient: HostClientSurface = {
   sessions: {
-    scan: async (root) => {
-      const raw = await hostRequest("session.scan", { root });
+    scan: async (root, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("session.scan", { root }, ctx);
       return Array.isArray(raw) ? (raw as RustSessionProjection[]) : [];
     },
-    rename: async (root, path, title) => {
-      await hostRequest("session.rename", { root, path, title });
+    rename: async (root, path, title, ctx = defaultProfileContext()) => {
+      await hostRequest("session.rename", { root, path, title }, ctx);
     },
-    delete: async (root, path) => {
-      await hostRequest("session.delete", { root, path });
+    delete: async (root, path, ctx = defaultProfileContext()) => {
+      await hostRequest("session.delete", { root, path }, ctx);
     },
   },
   journal: {
-    append: async (stream, options = {}) => {
+    append: async (stream, options = {}, ctx = defaultProfileContext()) => {
       const raw = await hostRequest("journal.append", {
         stream,
         kind: options.kind ?? "message",
         class: options.class ?? "reliable",
         payload: options.payload ?? "",
-      });
+      }, ctx);
       // Host replies {"seq":N}; accept a bare number too (older shape).
       if (raw !== null && typeof raw === "object" && "seq" in raw && typeof raw.seq === "number") {
         return raw.seq;
@@ -161,62 +163,49 @@ export const hostClient: HostClientSurface = {
       if (typeof raw === "number") return raw;
       throw new Error(`journal.append: unexpected response ${JSON.stringify(raw)}`);
     },
-    view: async (stream) => {
-      const raw = await hostRequest("journal.view", { stream });
+    view: async (stream, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("journal.view", { stream }, ctx);
       return Array.isArray(raw) ? (raw as number[]) : [];
     },
   },
   settings: {
-    list: async () => {
-      const raw = await hostRequest("settings.list", {});
+    list: async (ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("settings.list", {}, ctx);
       if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
       throw new Error(`settings.list: unexpected response ${JSON.stringify(raw)}`);
     },
-    path: async () => {
-      const raw = await hostRequest("settings.path", {});
+    path: async (ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("settings.path", {}, ctx);
       return typeof raw === "string" && raw ? raw : null;
     },
-    set: async (key, value) => {
-      const raw = await hostRequest("settings.set", { key, value });
+    set: async (key, value, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("settings.set", { key, value }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { output?: unknown }).output === "string") return raw as { output: string };
       throw new Error(`settings.set: unexpected response ${JSON.stringify(raw)}`);
     },
-    reset: async (key) => {
-      const raw = await hostRequest("settings.reset", { key });
+    reset: async (key, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("settings.reset", { key }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { output?: unknown }).output === "string") return raw as { output: string };
       throw new Error(`settings.reset: unexpected response ${JSON.stringify(raw)}`);
     },
   },
-  host: {
-    status: () => {
-      // Re-resolve per call: env/install layout can change while the server
-      // runs (omp update, packaged vs dev layouts).
-      const resolution = resolveHostBin({ moduleDir: MODULE_DIR });
-      return { mode: resolution.mode, path: resolution.path, available: resolution.exists };
-    },
-    repair: () => {
-      const result = cleanupOrphanRustHosts();
-      return { stoppedOrphanHosts: result.stopped, orphanHostPids: result.pids };
-    },
-    orphans: () => listOrphanRustHosts(),
-  },
   files: {
-    list: async (roots, path) => {
-      const raw = await hostRequest("files.list", { roots, path });
-      if (raw !== null && typeof raw === "object" && Array.isArray((raw as { entries?: unknown }).entries) && typeof (raw as { path?: unknown }).path === "string") {
+    list: async (roots, path, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("files.list", { roots, path }, ctx);
+      if (raw !== null && typeof raw === "object" && Array.isArray((raw as { entries?: unknown }).entries)) {
         return raw as { entries: Array<{ name: string; isDir: boolean }>; path: string };
       }
       throw new Error(`files.list: unexpected response ${JSON.stringify(raw)}`);
     },
-    read: async (roots, path) => {
-      const raw = await hostRequest("files.read", { roots, path });
-      if (raw !== null && typeof raw === "object" && typeof (raw as { content?: unknown }).content === "string" && typeof (raw as { language?: unknown }).language === "string" && typeof (raw as { size?: unknown }).size === "number") {
+    read: async (roots, path, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("files.read", { roots, path }, ctx);
+      if (raw !== null && typeof raw === "object" && typeof (raw as { content?: unknown }).content === "string") {
         return raw as { content: string; language: string; size: number };
       }
       throw new Error(`files.read: unexpected response ${JSON.stringify(raw)}`);
     },
-    meta: async (roots, path) => {
-      const raw = await hostRequest("files.meta", { roots, path });
+    meta: async (roots, path, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("files.meta", { roots, path }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { size?: unknown }).size === "number") {
         return raw as { size: number; language: string; mime: string; previewKind: string | null };
       }
@@ -224,41 +213,41 @@ export const hostClient: HostClientSurface = {
     },
   },
   git: {
-    status: async (roots, cwd) => {
-      const raw = await hostRequest("git.status", { roots, cwd });
+    status: async (roots, cwd, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("git.status", { roots, cwd }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { isGitRepository?: unknown }).isGitRepository === "boolean") {
         return raw as GitStatusResponse;
       }
       throw new Error(`git.status: unexpected response ${JSON.stringify(raw)}`);
     },
-    branches: async (roots, cwd) => {
-      const raw = await hostRequest("git.branches", { roots, cwd });
+    branches: async (roots, cwd, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("git.branches", { roots, cwd }, ctx);
       if (Array.isArray(raw)) return raw as Array<{ name: string; current: boolean }>;
       throw new Error(`git.branches: unexpected response ${JSON.stringify(raw)}`);
     },
-    checkout: async (roots, cwd, branch) => {
-      const raw = await hostRequest("git.checkout", { roots, cwd, branch });
+    checkout: async (roots, cwd, branch, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("git.checkout", { roots, cwd, branch }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { branch?: unknown }).branch === "string") {
         return raw as { branch: string };
       }
       throw new Error(`git.checkout: unexpected response ${JSON.stringify(raw)}`);
     },
-    commit: async (roots, cwd, message) => {
-      const raw = await hostRequest("git.commit", { roots, cwd, message });
+    commit: async (roots, cwd, message, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("git.commit", { roots, cwd, message }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { hash?: unknown }).hash === "string") {
         return raw as { hash: string; output: string };
       }
       throw new Error(`git.commit: unexpected response ${JSON.stringify(raw)}`);
     },
-    push: async (roots, cwd) => {
-      const raw = await hostRequest("git.push", { roots, cwd });
+    push: async (roots, cwd, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("git.push", { roots, cwd }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { branch?: unknown }).branch === "string") {
         return raw as { branch: string; output: string };
       }
       throw new Error(`git.push: unexpected response ${JSON.stringify(raw)}`);
     },
-    diff: async (roots, cwd, filePath) => {
-      const raw = await hostRequest("git.diff", { roots, cwd, filePath });
+    diff: async (roots, cwd, filePath, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("git.diff", { roots, cwd, filePath }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { supported?: unknown }).supported === "boolean") {
         return raw as { supported: boolean; status?: string; patch?: string };
       }
@@ -266,8 +255,8 @@ export const hostClient: HostClientSurface = {
     },
   },
   commands: {
-    run: async (roots, cwd, command, detach, envs) => {
-      const raw = await hostRequest("commands.run", { roots, cwd, command, detach, ...(envs ? { env: envs } : {}) });
+    run: async (roots, cwd, command, detach, envs, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("commands.run", { roots, cwd, command, detach, ...(envs ? { env: envs } : {}) }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { mode?: unknown }).mode === "string") {
         return raw as { mode: "wait"; exitCode: number | null; timedOut: boolean; output: string } | { mode: "detach"; pid: number; logPath: string };
       }
@@ -275,70 +264,85 @@ export const hostClient: HostClientSurface = {
     },
   },
   terminal: {
-    spawn: async (roots, cwd, opts = {}) => {
+    spawn: async (roots, cwd, opts = {}, ctx = defaultProfileContext()) => {
       const raw = await hostRequest("pty.spawn", {
         roots,
         cwd,
         ...(opts.cols !== undefined ? { cols: opts.cols } : {}),
         ...(opts.rows !== undefined ? { rows: opts.rows } : {}),
         ...(opts.env ? { env: opts.env } : {}),
-      });
+      }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { id?: unknown }).id === "string") {
         return raw as { id: string };
       }
       throw new Error(`pty.spawn: unexpected response ${JSON.stringify(raw)}`);
     },
-    write: async (id, data) => {
-      await hostRequest("pty.write", { id, data });
+    write: async (id, data, ctx = defaultProfileContext()) => {
+      await hostRequest("pty.write", { id, data }, ctx);
     },
-    resize: async (id, cols, rows) => {
-      await hostRequest("pty.resize", { id, cols, rows });
+    resize: async (id, cols, rows, ctx = defaultProfileContext()) => {
+      await hostRequest("pty.resize", { id, cols, rows }, ctx);
     },
-    kill: async (id) => {
-      await hostRequest("pty.kill", { id });
+    kill: async (id, ctx = defaultProfileContext()) => {
+      await hostRequest("pty.kill", { id }, ctx);
     },
-    attach: async (id, onEvent) => {
-      return hostManager.ptyAttach(id, onEvent);
+    attach: async (id, onEvent, ctx = defaultProfileContext()) => {
+      return hostFor(ctx).ptyAttach(id, onEvent);
     },
   },
   device: {
-    issue: async (ttlMs) => {
-      const raw = await hostRequest("device.issue", ttlMs !== undefined ? { ttlMs } : {});
+    issue: async (ttlMs, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("device.issue", ttlMs !== undefined ? { ttlMs } : {}, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { token?: unknown }).token === "string") {
         return raw as { token: string; expiresAt: number };
       }
       throw new Error(`device.issue: unexpected response ${JSON.stringify(raw)}`);
     },
-    enroll: async (token, userAgent, mobile, maxDevices) => {
-      const raw = await hostRequest("device.enroll", { token, userAgent, ...(mobile !== undefined ? { mobile } : {}), ...(maxDevices !== undefined ? { maxDevices } : {}) });
+    enroll: async (token, userAgent, mobile, maxDevices, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("device.enroll", { token, userAgent, ...(mobile !== undefined ? { mobile } : {}), ...(maxDevices !== undefined ? { maxDevices } : {}) }, ctx);
       if (raw !== null && typeof raw === "object" && typeof (raw as { id?: unknown }).id === "string") {
         return raw as { id: string };
       }
       throw new Error(`device.enroll: unexpected response ${JSON.stringify(raw)}`);
     },
-    deviceSecret: async (id) => {
-      const raw = await hostRequest("device.authSecret", { id });
+    deviceSecret: async (id, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("device.authSecret", { id }, ctx);
       if (raw !== null && typeof raw === "object") {
         const secret = (raw as { secret?: unknown }).secret;
         return typeof secret === "string" ? secret : null;
       }
       return null;
     },
-    touch: async (id) => {
-      const raw = await hostRequest("device.touch", { id });
+    touch: async (id, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("device.touch", { id }, ctx);
       return raw as { ok: boolean };
     },
-    revoke: async (id) => {
-      const raw = await hostRequest("device.revoke", { id });
+    revoke: async (id, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("device.revoke", { id }, ctx);
       return raw as { ok: boolean };
     },
-    revokeAll: async () => {
-      const raw = await hostRequest("device.revokeAll", {});
+    revokeAll: async (ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("device.revokeAll", {}, ctx);
       return raw as { ok: boolean };
     },
-    list: async (offlineAfterMs) => {
-      const raw = await hostRequest("device.list", offlineAfterMs !== undefined ? { offlineAfterMs } : {});
+    list: async (offlineAfterMs, ctx = defaultProfileContext()) => {
+      const raw = await hostRequest("device.list", offlineAfterMs !== undefined ? { offlineAfterMs } : {}, ctx);
       return Array.isArray(raw) ? (raw as Array<{ id: string; name: string; platform: string; pairedAt: number; lastActiveAt: number; online: boolean }>) : [];
+    },
+  },
+  host: {
+    status: () => {
+      // Re-resolve per call: env/install layout can change while the server
+      // runs.
+      const bin = resolveHostBin({ moduleDir: MODULE_DIR });
+      return { mode: bin.mode, path: bin.path, available: bin.exists };
+    },
+    repair: (ctx) => {
+      const res = cleanupOrphanRustHosts({ profileKey: ctx?.key });
+      return { stoppedOrphanHosts: res.stopped, orphanHostPids: res.pids };
+    },
+    orphans: (ctx) => {
+      return listOrphanRustHosts(ctx?.key);
     },
   },
 };

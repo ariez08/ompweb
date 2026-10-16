@@ -67,8 +67,10 @@ export interface RpcProcessOptions {
   cwd: string;
   /** Extra CLI args appended after the base `--mode rpc-ui --cwd <cwd>`. */
   extraArgs?: string[];
-  /** Environment overrides merged over process.env. */
-  env?: Record<string, string>;
+  /** Environment overrides merged over process.env. Loose record (not
+   * `NodeJS.ProcessEnv`) because Next declares NODE_ENV as required on
+   * ProcessEnv, which would force every literal call site to invent it. */
+  env?: Record<string, string | undefined>;
   /** Called for every non-response frame (events, extension UI, subagent frames). */
   onFrame?: (frame: RpcFrame) => void;
   /** Called once when the child exits, after pending commands are rejected. */

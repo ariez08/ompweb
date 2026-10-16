@@ -1,16 +1,23 @@
 import { homedir } from "os";
 import { RpcProcess } from "./rpc-process";
+import { defaultProfileContext, hostEnvFor, type ProfileContext } from "./profile-context";
 
 /**
- * Shared short-lived `omp` utility process for global registry/auth queries
+ * Short-lived `omp` utility processes for global registry/auth queries
  * (get_available_models, get_login_providers, get_state). These commands do
- * not belong to any user session, so they run against a single lazily-started
- * RPC process that is killed after ~60s of inactivity. Access is serialized:
- * the omp RPC loop handles one command at a time anyway, and serialization
- * lets lazy start/idle-kill stay race-free.
+ * not belong to any user session, so they run against a lazily-started RPC
+ * process PER PROFILE that is killed after ~5 minutes of inactivity. Access is
+ * serialized within a profile: the omp RPC loop handles one command at a time
+ * anyway, and serialization lets lazy start/idle-kill stay race-free.
  *
- * Real user sessions must use lib/rpc-manager.ts instead — this process runs
- * with --no-session and its agent state is throwaway.
+ * Per profile and not per server: the model registry and the credential store
+ * live in the agent dir, so one shared process would answer every profile with
+ * the models and providers of whichever profile started it first — the
+ * split-brain the profile switcher exists to remove. Same shape as the Rust
+ * host multiplexing: one single-tenant child per profile.
+ *
+ * Real user sessions must use lib/rpc-manager.ts instead — these processes run
+ * with --no-session and their agent state is throwaway.
  */
 
 // Extensions stay ENABLED: they can register models and login providers, and
@@ -21,7 +28,7 @@ const UTILITY_EXTRA_ARGS = ["--no-session", "--no-skills", "--no-lsp"];
 const READY_TIMEOUT_MS = 60_000;
 // Longer than the 60s models-cache TTL on purpose: with idle-kill == TTL every
 // pause past a minute paid a cold multi-second respawn on top of the stale
-// cache. Cost of the longer window is one idle omp process.
+// cache. Cost of the longer window is one idle omp process per live profile.
 const IDLE_KILL_MS = 300_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 
@@ -55,51 +62,66 @@ export interface OmpLoginProvider {
 
 interface UtilityRpcState {
   proc: RpcProcess | null;
-  idleTimer: NodeJS.Timeout | null;
+  // `undefined`, not `null`: clearTimeout() takes Timeout | undefined, so the
+  // handle can be cleared unconditionally without a redundant truthiness guard.
+  idleTimer: NodeJS.Timeout | undefined;
   queue: Promise<void>;
 }
 
 declare global {
-  var __ompUtilityRpcState: UtilityRpcState | undefined;
+  var __ompUtilityRpcStates: Map<string, UtilityRpcState> | undefined;
 }
 
-function getState(): UtilityRpcState {
-  if (!globalThis.__ompUtilityRpcState) {
-    globalThis.__ompUtilityRpcState = { proc: null, idleTimer: null, queue: Promise.resolve() };
-    // Mirror the session registry in lib/rpc-manager.ts: dispose the shared
-    // utility omp process on server shutdown so it does not outlive the server.
-    // Idempotent and safe to call any time (clears the idle timer + disposes).
+function getState(ctx: ProfileContext): UtilityRpcState {
+  if (!globalThis.__ompUtilityRpcStates) {
+    globalThis.__ompUtilityRpcStates = new Map();
+    // Mirror the session registry in lib/rpc-manager.ts: dispose the utility
+    // omp processes on server shutdown so they do not outlive the server.
+    // Idempotent and safe to call any time (clears idle timers + disposes).
     const cleanup = () => disposeUtilityRpc();
     process.once("exit", cleanup);
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);
   }
-  return globalThis.__ompUtilityRpcState;
+  const states = globalThis.__ompUtilityRpcStates;
+  let state = states.get(ctx.key);
+  if (!state) {
+    state = { proc: null, idleTimer: undefined, queue: Promise.resolve() };
+    states.set(ctx.key, state);
+  }
+  return state;
 }
 
 /**
- * Tear down the shared utility omp process immediately (skip the idle timer).
- * Registered as a server-shutdown hook in getState() above (mirroring the
- * session registry in lib/rpc-manager.ts) so the utility process does not
- * outlive the server; also safe to call any time — it just clears any pending
- * idle kill and disposes the live child.
+ * Tear down utility omp processes immediately (skip the idle timers). With a
+ * context, only that profile's process is dropped — a model/config change in
+ * one profile must not cold-start another profile's registry query. Without
+ * one (the server-shutdown hook) every profile is settled.
+ * Registered as a shutdown hook in getState() above, mirroring the session
+ * registry in lib/rpc-manager.ts; also safe to call any time.
  */
-export function disposeUtilityRpc(): void {
-  const state = globalThis.__ompUtilityRpcState;
-  if (!state) return;
-  if (state.idleTimer) {
-    clearTimeout(state.idleTimer);
-    state.idleTimer = null;
+export function disposeUtilityRpc(ctx?: ProfileContext): void {
+  const states = globalThis.__ompUtilityRpcStates;
+  if (!states) return;
+  const targets = ctx ? [ctx.key] : [...states.keys()];
+  for (const key of targets) {
+    const state = states.get(key);
+    if (!state) continue;
+    if (state.idleTimer) {
+      clearTimeout(state.idleTimer);
+      state.idleTimer = undefined;
+    }
+    const proc = state.proc;
+    state.proc = null;
+    if (proc) void proc.dispose();
+    states.delete(key);
   }
-  const proc = state.proc;
-  state.proc = null;
-  if (proc) void proc.dispose();
 }
 
 function scheduleIdleKill(state: UtilityRpcState): void {
-  if (state.idleTimer) clearTimeout(state.idleTimer);
+  clearTimeout(state.idleTimer);
   state.idleTimer = setTimeout(() => {
-    state.idleTimer = null;
+    state.idleTimer = undefined;
     const proc = state.proc;
     state.proc = null;
     if (proc) void proc.dispose();
@@ -107,10 +129,14 @@ function scheduleIdleKill(state: UtilityRpcState): void {
   state.idleTimer.unref?.();
 }
 
-async function startProcess(state: UtilityRpcState): Promise<RpcProcess> {
+async function startProcess(state: UtilityRpcState, ctx: ProfileContext): Promise<RpcProcess> {
   const proc = new RpcProcess({
     cwd: homedir(),
     extraArgs: UTILITY_EXTRA_ARGS,
+    // Pin the profile: the registry and credentials are read from the agent dir
+    // this process inherits, so an unpinned child answers with whatever
+    // profile the server was launched under.
+    env: hostEnvFor(ctx),
     onExit: () => {
       if (state.proc === proc) state.proc = null;
     },
@@ -125,21 +151,23 @@ async function startProcess(state: UtilityRpcState): Promise<RpcProcess> {
   return proc;
 }
 
-/** Run one RPC command on the shared utility process (lazy start, serialized,
- * idle-killed). Rejections from earlier commands never poison the queue. */
+/** Run one RPC command on the profile's utility process (lazy start,
+ * serialized, idle-killed). Rejections from earlier commands never poison the
+ * queue. */
 export function runUtilityCommand<T = unknown>(
   command: { type: string; [key: string]: unknown },
   timeoutMs: number = DEFAULT_COMMAND_TIMEOUT_MS,
+  ctx: ProfileContext = defaultProfileContext(),
 ): Promise<T> {
-  const state = getState();
+  const state = getState(ctx);
   const run = state.queue.then(async () => {
     if (state.idleTimer) {
       clearTimeout(state.idleTimer);
-      state.idleTimer = null;
+      state.idleTimer = undefined;
     }
     try {
       if (!state.proc || !state.proc.isAlive) {
-        state.proc = await startProcess(state);
+        state.proc = await startProcess(state, ctx);
       }
       return await state.proc.sendCommand<T>(command, timeoutMs);
     } finally {
@@ -158,7 +186,7 @@ export function runUtilityCommand<T = unknown>(
  * points PI_CODING_AGENT_DIR at a temp dir via `env`. */
 export async function runIsolatedUtilityCommand<T = unknown>(
   command: { type: string; [key: string]: unknown },
-  options: { env?: Record<string, string>; cwd?: string; timeoutMs?: number } = {},
+  options: { env?: Record<string, string | undefined>; cwd?: string; timeoutMs?: number } = {},
 ): Promise<T> {
   const proc = new RpcProcess({
     cwd: options.cwd ?? homedir(),

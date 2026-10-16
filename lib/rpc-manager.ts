@@ -4,6 +4,7 @@ import { clearBackendErrors, recordBackendError, recentBackendErrors } from "./b
 import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { RpcCommandError, RpcCommandTimeoutError, type RpcFrame } from "./omp/rpc-process";
+import { defaultProfileContext, type ProfileContext, resolveProfileContext } from "./omp/profile-context";
 import { createRpcProcess, type RpcProcessLike } from "./omp/rust-rpc-process";
 import { readNativeSettings } from "./omp/settings-config";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
@@ -280,13 +281,16 @@ export class AgentSessionWrapper {
    * can warn the user the agent is running in a different directory. */
   private readonly recordedCwd: string | null;
 
+  readonly ctx: ProfileContext;
+
   // Plain field assignments (not TS parameter properties) keep this module
   // runnable under Node's strip-only TypeScript mode for probes/tests.
-  constructor(proc: RpcProcessLike, cwd: string, recordedCwd?: string | null, advisorSpawned = false) {
+  constructor(proc: RpcProcessLike, cwd: string, recordedCwd?: string | null, advisorSpawned = false, ctx: ProfileContext = defaultProfileContext()) {
     this.proc = proc;
     this.cwd = cwd;
     this.recordedCwd = recordedCwd ?? null;
     this.advisorSpawned = advisorSpawned;
+    this.ctx = ctx;
   }
 
   get sessionId(): string {
@@ -348,7 +352,10 @@ export class AgentSessionWrapper {
     this.streaming = state.isStreaming;
     this.compacting = state.isCompacting;
     this.fastModeEnabled = state.fastModeEnabled ?? state.fastMode ?? this.fastModeEnabled;
-    if (this._sessionFile) cacheSessionPath(this._sessionId, this._sessionFile);
+    // The wrapper owns its profile ctx; an unscoped call would land the path
+    // in the default profile's cache and let a same-id session in another
+    // profile resolve to the wrong file.
+    if (this._sessionFile) cacheSessionPath(this._sessionId, this._sessionFile, this.ctx);
   }
 
   handleProcessExit(stderrTail: string): void {
@@ -563,7 +570,7 @@ export class AgentSessionWrapper {
     // prompts, including login/editor confirmations, remain interactive.
     let autoApproveExtension = false;
     try {
-      autoApproveExtension = readNativeSettings().settings.tools?.approval?.extension === "allow";
+      autoApproveExtension = readNativeSettings(this.ctx).settings.tools?.approval?.extension === "allow";
     } catch {
       // A malformed config must not prevent normal interactive approval.
     }
@@ -930,6 +937,7 @@ export class AgentSessionWrapper {
           onExit: ({ stderrTail }) => {
             if (this.proc === proc) this.handleProcessExit(stderrTail);
           },
+          ctx: this.ctx,
         });
       } catch (error) {
         // Same classification as startRpcSession: in Rust mode a spawn failure
@@ -1305,12 +1313,17 @@ export class AgentSessionWrapper {
 export interface RunningSessionUpdate {
   ids: string[];
   refreshSessionList: boolean;
+  profile: string;
 }
 
 declare global {
   var __ompSessions: Map<string, AgentSessionWrapper> | undefined;
   var __ompStartLocks: Map<string, Promise<{ session: AgentSessionWrapper; realSessionId: string }>> | undefined;
   var __ompRunningListeners: Set<(update: RunningSessionUpdate) => void> | undefined;
+}
+
+function sessionKey(profileKey: string, sessionId: string): string {
+  return `${profileKey}:${sessionId}`;
 }
 
 function getRegistry(): Map<string, AgentSessionWrapper> {
@@ -1329,22 +1342,34 @@ function getLocks(): Map<string, Promise<{ session: AgentSessionWrapper; realSes
   return globalThis.__ompStartLocks;
 }
 
-export function getRpcSession(sessionId: string): AgentSessionWrapper | undefined {
-  return getRegistry().get(sessionId);
+export function getRpcSession(sessionId: string, ctx: ProfileContext = defaultProfileContext()): AgentSessionWrapper | undefined {
+  const registry = getRegistry();
+  return registry.get(sessionKey(ctx.key, sessionId)) ?? registry.get(sessionId);
 }
 
 export function getRunningRpcSessionIds(): string[] {
+  return getRunningRpcSessionIdsFor(defaultProfileContext());
+}
+
+export function getRunningRpcSessionIdsFor(ctx: ProfileContext): string[] {
+  return getRunningSessionIdsForProfileKey(ctx.key);
+}
+
+function getRunningSessionIdsForProfileKey(key: string): string[] {
   const ids = new Set<string>();
-  for (const [sessionId, session] of getRegistry()) {
-    if (session.isRunning()) ids.add(session.sessionId || sessionId);
+  for (const session of getRegistry().values()) {
+    if (session.ctx.key === key && session.isRunning()) {
+      ids.add(session.sessionId);
+    }
   }
   return [...ids];
 }
 
 /** Stop all live omp children after an explicit runtime update. The browser will
  * reconnect sessions on demand and start them with the updated executable. */
-export async function restartAllRpcSessions(): Promise<number> {
-  const sessions = [...new Set(getRegistry().values())];
+export async function restartAllRpcSessions(ctx?: ProfileContext): Promise<number> {
+  const allSessions = [...new Set(getRegistry().values())];
+  const sessions = ctx ? allSessions.filter((s) => s.ctx.key === ctx.key) : allSessions;
   // A single session may fail to tear down (e.g. a half-open SSE stream);
   // that must not block restarting the rest.
   await Promise.all(sessions.map((session) => session.destroyAndWait().catch(() => undefined)));
@@ -1366,27 +1391,47 @@ function getRunningListeners(): Set<(update: RunningSessionUpdate) => void> {
 }
 
 /** Subscribe to running-session-id changes and session-list refreshes. */
-export function subscribeRunningSessions(listener: (update: RunningSessionUpdate) => void): () => void {
+export function subscribeRunningSessions(
+  listener: (update: RunningSessionUpdate) => void,
+  profileKey?: string,
+): () => void {
   const listeners = getRunningListeners();
-  listeners.add(listener);
-  return () => { listeners.delete(listener); };
+  const handler = (update: RunningSessionUpdate) => {
+    if (profileKey !== undefined && update.profile !== profileKey) return;
+    listener(update);
+  };
+  listeners.add(handler);
+  return () => { listeners.delete(handler); };
 }
 
-let lastRunningSnapshot = "";
+const lastRunningSnapshots = new Map<string, string>();
 
 /**
  * Recompute the running-session-id set and, when it changes, broadcast it.
  * A session file may first appear after its id starts running, so callers can
  * force one otherwise-identical update to refresh sidebar session metadata.
  */
-export function notifyRunningChange({ refreshSessionList = false }: { refreshSessionList?: boolean } = {}): void {
-  const ids = getRunningRpcSessionIds();
-  const snapshot = JSON.stringify([...ids].sort());
-  if (snapshot === lastRunningSnapshot && !refreshSessionList) return;
-  lastRunningSnapshot = snapshot;
-  const update = { ids, refreshSessionList };
-  for (const listener of getRunningListeners()) {
-    try { listener(update); } catch { /* ignore listener errors */ }
+export function notifyRunningChange({
+  refreshSessionList = false,
+  profile,
+}: { refreshSessionList?: boolean; profile?: string } = {}): void {
+  const registry = getRegistry();
+  const profiles = profile
+    ? [profile]
+    : Array.from(new Set(Array.from(registry.values()).map((s) => s.ctx.key)));
+  if (profiles.length === 0) profiles.push(defaultProfileContext().key);
+
+  for (const prof of profiles) {
+    const ids = getRunningSessionIdsForProfileKey(prof);
+    const snapshot = JSON.stringify([...ids].sort());
+    const lastRunningSnapshot = lastRunningSnapshots.get(prof);
+    if (snapshot === lastRunningSnapshot && !refreshSessionList) continue;
+    lastRunningSnapshots.set(prof, snapshot);
+
+    const update: RunningSessionUpdate = { ids, refreshSessionList, profile: prof };
+    for (const listener of getRunningListeners()) {
+      try { listener(update); } catch { /* ignore listener errors */ }
+    }
   }
 }
 
@@ -1407,11 +1452,12 @@ export async function startRpcSession(
   /** The cwd recorded in the session file header, used to detect a spawn
    * fallback (recorded dir gone) and warn the user. Omit for new sessions. */
   recordedCwd?: string | null,
+  ctx: ProfileContext = defaultProfileContext(),
 ): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
   const registry = getRegistry();
   const locks = getLocks();
-
-  const existing = registry.get(sessionId);
+  const lockKey = sessionKey(ctx.key, sessionId);
+  const existing = registry.get(lockKey);
   if (existing?.isAlive()) {
     // --advisor is a spawn-time flag with no runtime RPC. When the caller
     // carries an explicit advisor setting that differs from the live child's,
@@ -1429,7 +1475,7 @@ export async function startRpcSession(
   // race on resume/delete/archive.
   if (existing?.destroyPromise) await existing.destroyPromise;
 
-  const inflight = locks.get(sessionId);
+  const inflight = locks.get(lockKey);
   if (inflight) return inflight;
 
   const starting = (async () => {
@@ -1443,6 +1489,7 @@ export async function startRpcSession(
         sessionId: sessionId ?? `session-${Math.random().toString(36).slice(2, 10)}`,
         extraArgs: buildSessionSpawnArgs(sessionFile, toolNames, advisor === true),
         onExit: ({ stderrTail }) => holder.wrapper?.handleProcessExit(stderrTail),
+        ctx,
       });
     } catch (error) {
       // Rust 后端下启动失败 = host 不可用（二进制缺失/启动超时/IPC 失败），
@@ -1452,7 +1499,7 @@ export async function startRpcSession(
       }
       throw error;
     }
-    const created = new AgentSessionWrapper(proc, cwd, recordedCwd, advisor === true);
+    const created = new AgentSessionWrapper(proc, cwd, recordedCwd, advisor === true, ctx);
     holder.wrapper = created;
     created.start();
     try {
@@ -1484,17 +1531,21 @@ export async function startRpcSession(
       );
     }
     created.onDestroy(() => {
-      if (registry.get(created.sessionId) === created) registry.delete(created.sessionId);
-      if (registry.get(realSessionId) === created) registry.delete(realSessionId);
+      const k1 = sessionKey(ctx.key, created.sessionId);
+      const k2 = sessionKey(ctx.key, realSessionId);
+      if (registry.get(k1) === created) registry.delete(k1);
+      if (registry.get(k2) === created) registry.delete(k2);
     });
     created.onIdentityChange((oldId, newId) => {
-      if (registry.get(oldId) === created) registry.delete(oldId);
-      registry.set(newId, created);
+      const oldKey = sessionKey(ctx.key, oldId);
+      const newKey = sessionKey(ctx.key, newId);
+      if (registry.get(oldKey) === created) registry.delete(oldKey);
+      registry.set(newKey, created);
     });
-    registry.set(realSessionId, created);
+    registry.set(sessionKey(ctx.key, realSessionId), created);
     return { session: created, realSessionId };
-  })().finally(() => locks.delete(sessionId));
+  })().finally(() => locks.delete(lockKey));
 
-  locks.set(sessionId, starting);
+  locks.set(lockKey, starting);
   return starting;
 }

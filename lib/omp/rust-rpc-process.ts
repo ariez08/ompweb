@@ -13,15 +13,15 @@
  * Rust is the default backend. Node path (RpcProcess) remains the explicit
  * rollback via OMPWEB_BACKEND=node.
  */
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
-import { join } from "node:path";
-import { getAgentDir } from "./paths";
+import { DEFAULT_PROFILE, defaultProfileContext, hostEnvFor, resolveProfileContext, type ProfileContext } from "./profile-context";
+import { normalizeProfileName } from "./paths";
 import { assertHostAvailable, resolveHostBin, resolveModuleDir } from "./host-bin";
 import { RpcFrameDecoder, type RpcFrameRecord, type RpcProtocolVersion } from "./rpc-frame";
 import { RpcCommandError, RpcCommandTimeoutError } from "./rpc-process";
 import type { RpcProcessOptions } from "./rpc-process";
-
 /**
  * Directory of this module — the workspace resolution root (dev/CI cargo
  * output). Packaged desktop injects OMPWEB_HOST_BIN from the Electron main
@@ -42,8 +42,14 @@ function hostBinaryPath(): string {
  * hosts keep the runtime journal open and make a later resume look like a
  * second omp instance. Only hosts reparented to launchd/init are eligible;
  * the host owned by the current server is never touched.
+ *
+ * With a `profileKey`, the repair is confined to that profile: every host
+ * argv is the identical `<bin> --ipc`, so the profile is read back from the
+ * process environment instead. Where the profile cannot be determined the
+ * host is left alone — killing another profile's orphan would interrupt its
+ * live sessions, and a diagnostics button must not do that silently.
  */
-export function cleanupOrphanRustHosts(options: { dryRun?: boolean } = {}): { stopped: number; pids: number[] } {
+export function cleanupOrphanRustHosts(options: { dryRun?: boolean; profileKey?: string } = {}): { stopped: number; pids: number[] } {
   if (process.platform === "win32") return { stopped: 0, pids: [] };
   let listing = "";
   try {
@@ -53,14 +59,22 @@ export function cleanupOrphanRustHosts(options: { dryRun?: boolean } = {}): { st
   }
   const hostBin = hostBinaryPath();
   const pids: number[] = [];
+  const activeHostPids = new Set<number>();
+  if (globalThis.__ompRustHosts) {
+    for (const h of globalThis.__ompRustHosts.values()) {
+      const pid = h.hostPid;
+      if (pid) activeHostPids.add(pid);
+    }
+  }
   for (const line of listing.split(/\r?\n/)) {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
     if (!match) continue;
     const pid = Number(match[1]);
     const ppid = Number(match[2]);
     const command = match[3].trim();
-    if (!Number.isInteger(pid) || pid <= 0 || ppid !== 1 || pid === process.pid) continue;
+    if (!Number.isInteger(pid) || pid <= 0 || ppid !== 1 || pid === process.pid || activeHostPids.has(pid)) continue;
     if (command !== `${hostBin} --ipc` && command !== `${hostBin} --ipc `) continue;
+    if (options.profileKey !== undefined && orphanHostKey(pid) !== options.profileKey) continue;
     if (options.dryRun) {
       pids.push(pid);
       continue;
@@ -74,18 +88,42 @@ export function cleanupOrphanRustHosts(options: { dryRun?: boolean } = {}): { st
   }
   return { stopped: pids.length, pids };
 }
-
-/** Inspect reparented OmpWeb hosts without terminating anything. */
-export function listOrphanRustHosts(): number[] {
-  return cleanupOrphanRustHosts({ dryRun: true }).pids;
+/**
+ * Profile key of a reparented host, read from its own process environment.
+ * Linux exposes `/proc/<pid>/environ`; macOS has no equivalent without
+ * elevated privileges, so there the key is `undefined` and a scoped repair
+ * declines to touch the process. An empty OMP_PROFILE means the default
+ * profile, matching `hostEnvFor`.
+ */
+function orphanHostKey(pid: number): string | undefined {
+  if (process.platform !== "linux") return undefined;
+  let raw: string;
+  try {
+    raw = readFileSync(`/proc/${pid}/environ`, "utf8");
+  } catch {
+    return undefined;
+  }
+  for (const entry of raw.split("\0")) {
+    const eq = entry.indexOf("=");
+    if (eq <= 0) continue;
+    if (entry.slice(0, eq) !== "OMP_PROFILE" && entry.slice(0, eq) !== "PI_PROFILE") continue;
+    const value = entry.slice(eq + 1).trim();
+    if (value) return normalizeProfileName(value) ?? DEFAULT_PROFILE;
+  }
+  return DEFAULT_PROFILE;
 }
 
+/** Inspect reparented OmpWeb hosts without terminating anything. */
+export function listOrphanRustHosts(profileKey?: string): number[] {
+  return cleanupOrphanRustHosts({ dryRun: true, profileKey }).pids;
+}
 export interface RustRpcProcessOptions {
   cwd: string;
   sessionId: string;
   extraArgs?: string[];
   onExit?: (info: { stderrTail: string }) => void;
   env?: Record<string, string>;
+  ctx?: ProfileContext;
 }
 
 interface PendingCommand {
@@ -111,11 +149,28 @@ export class RustHostManager {
   private nextId = 1;
   private subscribers = new Set<RpcFrameHandler>();
   private refs = 0;
+  readonly profileKey: string;
+  private readonly spawnHost: (path: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
 
-  constructor(private readonly spawnHost: typeof spawn = spawn) {}
+  constructor(
+    profileKeyOrSpawnHost?: string | ((path: string, args: readonly string[], options: SpawnOptions) => ChildProcess),
+    spawnHost: (path: string, args: readonly string[], options: SpawnOptions) => ChildProcess = spawn,
+  ) {
+    if (typeof profileKeyOrSpawnHost === "function") {
+      this.profileKey = "default";
+      this.spawnHost = profileKeyOrSpawnHost;
+    } else {
+      this.profileKey = profileKeyOrSpawnHost ?? "default";
+      this.spawnHost = spawnHost;
+    }
+  }
+
+  get hostPid(): number | undefined {
+    return this.host?.pid;
+  }
 
   cleanupOrphans(): { stopped: number; pids: number[] } {
-    return cleanupOrphanRustHosts();
+    return cleanupOrphanRustHosts({ profileKey: this.profileKey });
   }
 
   acquire(): void {
@@ -202,10 +257,11 @@ export class RustHostManager {
       // failures still surface through the IPC disconnect/error path below.
       // The Rust host is a background IPC service. Without windowsHide, every
       // host recycle flashes a console window in packaged Windows builds.
+      const ctx = resolveProfileContext(this.profileKey);
       const child = this.spawnHost(hostResolution.path, ["--ipc"], {
         stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true,
-        env: { ...process.env, OMPWEB_RUNTIME_DB: process.env.OMPWEB_RUNTIME_DB || join(getAgentDir(), "ompweb", "runtime.db") },
+        env: hostEnvFor(ctx) as NodeJS.ProcessEnv,
       });
       // The host is a workhorse for this process: it must never keep the
       // process alive (tests, short-lived scripts). shutdown() owns its final
@@ -247,8 +303,8 @@ export class RustHostManager {
       // fire normally while unref'd. Node's public Readable type does not
       // declare unref(), although pipe handles expose it on supported
       // runtimes, so retain a guarded optional call.
-      (child.stdout as typeof child.stdout & { unref?: () => void }).unref?.();
-      child.stdout.on("data", (chunk) => {
+      (child.stdout as (typeof child.stdout & { unref?: () => void }) | null)?.unref?.();
+      child.stdout?.on("data", (chunk: Buffer) => {
         if (this.port > 0 || this.host !== child) return;
         this.bootBuffer += chunk.toString();
         if (this.bootBuffer.length > 16 * 1024) {
@@ -309,7 +365,7 @@ export class RustHostManager {
         if (error) reject(error); else resolve(value);
       };
       const timer = setTimeout(() => finish(new RpcCommandTimeoutError(method, timeoutMs)), timeoutMs);
-      socket.once("error", (error) => finish(error));
+      socket.once("error", (error: Error) => finish(error));
       socket.once("close", () => finish(new RpcCommandError(method, "host control disconnected", "runtime_unavailable")));
       socket.once("connect", () => socket.write(JSON.stringify({ id: "hello", method: "hello", params: { token: this.token } }) + "\n"));
       socket.on("data", (chunk: Buffer) => {
@@ -352,7 +408,7 @@ export class RustHostManager {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { socket.destroy(); reject(new Error("host control connect timeout")); }, Math.min(timeoutMs, 5000));
         socket.once("connect", () => { clearTimeout(timer); resolve(); });
-        socket.once("error", (error) => { clearTimeout(timer); reject(error); });
+        socket.once("error", (error: Error) => { clearTimeout(timer); reject(error); });
       });
       await this.controlRequestRaw("hello", { token: this.token }, timeoutMs);
     } catch (error) {
@@ -525,10 +581,29 @@ export class RustHostManager {
     await this.controlRequest("agent.kill", { sessionId });
   }
 }
+declare global {
+  var __ompRustHosts: Map<string, RustHostManager> | undefined;
+}
 
-const hostManager = new RustHostManager();
-export { hostManager };
+function getHostsMap(): Map<string, RustHostManager> {
+  if (!globalThis.__ompRustHosts) {
+    globalThis.__ompRustHosts = new Map();
+  }
+  return globalThis.__ompRustHosts;
+}
 
+export function hostFor(keyOrCtx: string | ProfileContext = "default"): RustHostManager {
+  const key = typeof keyOrCtx === "string" ? keyOrCtx : keyOrCtx.key;
+  const map = getHostsMap();
+  let manager = map.get(key);
+  if (!manager) {
+    manager = new RustHostManager(key);
+    map.set(key, manager);
+  }
+  return manager;
+}
+
+export const hostManager = hostFor("default");
 export class RustRpcProcess {
   readonly cwd: string;
   readonly sessionId: string;
@@ -553,13 +628,18 @@ export class RustRpcProcess {
   private readyReject: ((reason?: unknown) => void) | null = null;
   private readyListener: RpcFrameHandler | null = null;
 
-  constructor(options: RustRpcProcessOptions) {
+  readonly ctx: ProfileContext;
+  private readonly manager: RustHostManager;
+
+  constructor(options: RustRpcProcessOptions & { ctx?: ProfileContext }) {
     this.cwd = options.cwd;
     this.sessionId = options.sessionId;
     this.extraArgs = options.extraArgs ?? [];
     this.onExit = options.onExit;
-    hostManager.acquire();
-    this.unsubscribeHost = hostManager.subscribe((frame) => {
+    this.ctx = options.ctx ?? defaultProfileContext();
+    this.manager = hostFor(this.ctx);
+    this.manager.acquire();
+    this.unsubscribeHost = this.manager.subscribe((frame) => {
       if (frame.type === "host_disconnected") {
         if (!this.exited) {
           this.exited = true;
@@ -613,8 +693,8 @@ export class RustRpcProcess {
 
   private async boot(): Promise<void> {
     try {
-      await hostManager.spawn(this.cwd, this.sessionId, this.extraArgs);
-      const stream = await hostManager.attach(this.sessionId, (frame) => {
+      await this.manager.spawn(this.cwd, this.sessionId, this.extraArgs);
+      const stream = await this.manager.attach(this.sessionId, (frame) => {
         for (const listener of this.frameListeners) listener(frame);
       });
       this.detach = stream.detach;
@@ -639,7 +719,7 @@ export class RustRpcProcess {
     this.unsubscribeHost = null;
     if (!this.released) {
       this.released = true;
-      hostManager.release();
+      this.manager.release();
     }
   }
 
@@ -687,7 +767,7 @@ export class RustRpcProcess {
         }
       };
       this.frameListeners.add(onFrame);
-      void hostManager.send(this.sessionId, { ...command, id }, timeoutMs).catch((error) => {
+      void this.manager.send(this.sessionId, { ...command, id }, timeoutMs).catch((error) => {
         clearTimeout(timer);
         this.frameListeners.delete(onFrame);
         reject(error instanceof Error ? error : new Error(String(error)));
@@ -705,7 +785,7 @@ export class RustRpcProcess {
 
   async sendFrame(frame: Record<string, unknown>): Promise<void> {
     if (this.exited) throw new Error("omp RPC process has exited");
-    await hostManager.send(this.sessionId, frame);
+    await this.manager.send(this.sessionId, frame);
   }
 
   async dispose(): Promise<void> {
@@ -713,7 +793,7 @@ export class RustRpcProcess {
     this.disposePromise = (async () => {
       if (!this.exited) {
         try {
-          await hostManager.kill(this.sessionId);
+          await this.manager.kill(this.sessionId);
         } catch {
           // kill on a dead session is fine
         }
@@ -758,15 +838,21 @@ export class RustRpcProcess {
 /** Low-level request over the shared host control connection (ensures the
  * host is running). Used by lib/omp/host-client.ts — the only sanctioned
  * caller for production domain access. */
-export async function hostRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
-  return hostManager.controlRequest(method, params);
+export async function hostRequest(
+  method: string,
+  params: Record<string, unknown>,
+  ctx: ProfileContext = defaultProfileContext(),
+): Promise<unknown> {
+  return hostFor(ctx).controlRequest(method, params);
 }
 
-/** Shut the shared host down now (kills the supervisor + its omp children).
+/** Shut all shared hosts down now (kills supervisors + their omp children).
  * Idle hosts already self-terminate after a grace period; this is the
  * explicit path for clean process shutdown (tests, headless lifecycle). */
 export async function shutdownRustHost(): Promise<void> {
-  await hostManager.shutdown();
+  const map = getHostsMap();
+  const hosts = Array.from(map.values());
+  await Promise.all(hosts.map((h) => h.shutdown()));
 }
 
 /** Factory used by rpc-manager: Rust backend by default. */
@@ -775,18 +861,22 @@ export async function createRpcProcess(options: {
   sessionId: string;
   extraArgs?: string[];
   onExit?: (info: { stderrTail: string }) => void;
+  ctx?: ProfileContext;
 }): Promise<RpcProcessLike> {
   // R8.7: Rust is the primary backend; OMPWEB_BACKEND=node is the explicit
   // rollback (No Hidden Fallback: the switch is user-visible, never silent).
   if (process.env.OMPWEB_BACKEND === "node") {
     const { RpcProcess } = await import("./rpc-process");
-    return new RpcProcess({ ...options } as RpcProcessOptions);
+    return new RpcProcess({
+      ...options,
+      env: options.ctx ? hostEnvFor(options.ctx) : undefined,
+    } as RpcProcessOptions);
   }
   // Route 3 (doc 16): when the host binary is absent the Rust backend is
   // Runtime unavailable — an explicit error with remediation, never a silent
   // fallback to the Node authority (OMPWEB_BACKEND=node is that rollback).
   assertHostAvailable({ moduleDir: MODULE_DIR });
-  return new RustRpcProcess({ ...options, sessionId: options.sessionId });
+  return new RustRpcProcess({ ...options, sessionId: options.sessionId, ctx: options.ctx });
 }
 
 export interface RpcProcessLike {
