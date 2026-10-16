@@ -53,6 +53,35 @@ function compareModelEntries(
     || modelNameCollator.compare(a.id, b.id);
 }
 
+// Upstream gateways like OmniRoute expose separate model aliases for thinking
+// effort tiers (e.g. -low, -medium, -high) for legacy clients lacking reasoning
+// parameters. In ompweb, thinking level is chosen natively in the UI, so we
+// collapse these suffixed variants into their canonical base model whenever that
+// base model already exists in the provider catalog.
+const EFFORT_SUFFIX_RE = /-(?:thinking-)?(none|min|minimal|low|medium|high|xhigh|max)(?:-\d+k)?$/i;
+const THINKING_LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+function resolveCanonicalBaseId(id: string, allIds: Set<string>): { baseId: string; effort: string } | null {
+  const match = EFFORT_SUFFIX_RE.exec(id);
+  if (!match) return null;
+  const effort = match[1].toLowerCase();
+  const rawBase = id.slice(0, match.index);
+  if (allIds.has(rawBase)) return { baseId: rawBase, effort };
+  if (allIds.has(`${rawBase}-thinking`)) return { baseId: `${rawBase}-thinking`, effort };
+  return null;
+}
+
+function sortThinkingLevels(levels: string[]): string[] {
+  return [...new Set(levels)].sort((a, b) => {
+    const idxA = THINKING_LEVEL_ORDER.indexOf(a);
+    const idxB = THINKING_LEVEL_ORDER.indexOf(b);
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
+    return a.localeCompare(b);
+  });
+}
+
 // "off" is always a valid selector; the concrete efforts come from the model's
 // baked thinking metadata (omp: getSupportedEfforts = reasoning ? efforts : []).
 function thinkingLevelsFor(model: OmpModel): string[] {
@@ -85,10 +114,51 @@ async function loadModels(ctx: ProfileContext): Promise<ModelsData> {
         }))
     : [];
 
+  const allIdsByProvider = new Map<string, Set<string>>();
+  for (const m of available) {
+    let set = allIdsByProvider.get(m.provider);
+    if (!set) {
+      set = new Set();
+      allIdsByProvider.set(m.provider, set);
+    }
+    set.add(m.id);
+  }
+
   const nameMap = new Map<string, string>();
   const thinkingLevels: Record<string, string[]> = {};
-  const modelList = available
-    .map((m) => ({ id: m.id, name: m.name, provider: m.provider, thinkingLevels: thinkingLevelsFor(m), supportsFastMode: supportsFastMode(m), contextWindow: m.contextWindow ?? undefined, maxTokens: m.maxTokens ?? undefined }))
+  for (const m of available) {
+    const key = `${m.provider}:${m.id}`;
+    nameMap.set(key, m.name);
+    thinkingLevels[key] = thinkingLevelsFor(m);
+  }
+
+  const collapsedModels: typeof available = [];
+  for (const m of available) {
+    const set = allIdsByProvider.get(m.provider);
+    const resolved = set ? resolveCanonicalBaseId(m.id, set) : null;
+    if (resolved) {
+      const baseKey = `${m.provider}:${resolved.baseId}`;
+      const levels = thinkingLevels[baseKey] ?? ["off"];
+      const eff = resolved.effort === "none" ? "off" : resolved.effort;
+      if (!levels.includes(eff)) {
+        levels.push(eff);
+      }
+      thinkingLevels[baseKey] = sortThinkingLevels(levels);
+      continue;
+    }
+    collapsedModels.push(m);
+  }
+
+  const modelList = collapsedModels
+    .map((m) => ({
+      id: m.id,
+      name: m.name,
+      provider: m.provider,
+      thinkingLevels: thinkingLevels[`${m.provider}:${m.id}`] ?? thinkingLevelsFor(m),
+      supportsFastMode: supportsFastMode(m),
+      contextWindow: m.contextWindow ?? undefined,
+      maxTokens: m.maxTokens ?? undefined,
+    }))
     .sort(compareModelEntries);
   const loginResponse = await runUtilityCommand<{ providers?: unknown }>(
     { type: "get_login_providers" },
@@ -123,9 +193,14 @@ async function loadModels(ctx: ProfileContext): Promise<ModelsData> {
       ctx,
     );
     const provider = state.model?.provider;
-    const modelId = state.model?.id;
-    if (provider && modelId && available.some((m) => m.provider === provider && m.id === modelId)) {
-      defaultModel = { provider, modelId };
+    let modelId = state.model?.id;
+    if (provider && modelId) {
+      const set = allIdsByProvider.get(provider);
+      const canonical = set ? resolveCanonicalBaseId(modelId, set) : null;
+      if (canonical) modelId = canonical.baseId;
+      if (collapsedModels.some((m) => m.provider === provider && m.id === modelId)) {
+        defaultModel = { provider, modelId };
+      }
     }
   } catch {
     // Default model is cosmetic — the models list is still useful without it.
