@@ -995,9 +995,10 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
     setRunningSessionIds(new Set());
     setProfileBuckets(null);
     onProfileChange?.(profile);
+    // ProfileSwitcher navigates immediately, so these are the fallback for a
+    // reload that is slow or blocked: the sidebar still ends up showing the new
+    // profile's own list and project registry instead of the previous one.
     void loadSessions(true);
-    // The projects registry is per profile too; without this the Workspaces
-    // list kept showing the previous profile's projects until a manual reload.
     void loadProjects();
   }, [loadSessions, loadProjects, onProfileChange]);
 

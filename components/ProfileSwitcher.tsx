@@ -82,6 +82,15 @@ export function ProfileSwitcher({
       const resolved = typeof body?.profile === "string" && body.profile ? body.profile : profile;
       setPayload((prev) => (prev ? { ...prev, current: resolved } : prev));
       onProfileChange?.(resolved);
+      // Reload rather than re-restore in place. Last-session restore is gated by
+      // a restored-once ref plus AppShell's boot gate, both of which are
+      // per-mount, and the project registry, models catalog and FileExplorer all
+      // re-derive from the new cookie too. A reload is the state users already
+      // verified as correct after switching.
+      // The query string is dropped on purpose: ?session=<id> names a session in
+      // the PREVIOUS profile, and carrying it into the reload would ask the new
+      // profile to open an id it does not have.
+      window.location.assign(window.location.pathname);
     } catch (switchError) {
       setError(switchError instanceof Error ? switchError.message : String(switchError));
     } finally {
