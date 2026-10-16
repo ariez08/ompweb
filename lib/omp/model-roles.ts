@@ -2,17 +2,18 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "path";
 import { isMap, parseDocument, stringify } from "yaml";
 import { getAgentDir } from "./paths";
+import { defaultProfileContext, type ProfileContext } from "./profile-context";
 import { isRecord } from "../type-guards";
 
 export type ModelRoles = Record<string, string>;
 
-function configPath(): string {
-  return join(getAgentDir(), "config.yml");
+function configPath(ctx: ProfileContext = defaultProfileContext()): string {
+  return join(ctx.agentDir, "config.yml");
 }
 
 /** Reads the native OMP role selectors from config.yml without touching other settings. */
-export function readModelRoles(): { path: string; roles: ModelRoles } {
-  const path = configPath();
+export function readModelRoles(ctx: ProfileContext = defaultProfileContext()): { path: string; roles: ModelRoles } {
+  const path = configPath(ctx);
   if (!existsSync(path)) return { path, roles: {} };
   const doc = parseDocument(readFileSync(path, "utf8"));
   if (doc.errors.length > 0) throw new Error(`${path} is not valid YAML: ${doc.errors[0].message}`);
@@ -25,8 +26,8 @@ export function readModelRoles(): { path: string; roles: ModelRoles } {
 }
 
 /** Updates only modelRoles, preserving the user's remaining native OMP config. */
-export function writeModelRoles(roles: ModelRoles): void {
-  const path = configPath();
+export function writeModelRoles(roles: ModelRoles, ctx: ProfileContext = defaultProfileContext()): void {
+  const path = configPath(ctx);
   const source = existsSync(path) ? readFileSync(path, "utf8") : "";
   const doc = parseDocument(source);
   if (doc.errors.length > 0) throw new Error(`${path} is not valid YAML: ${doc.errors[0].message}`);
@@ -42,8 +43,8 @@ export function writeModelRoles(roles: ModelRoles): void {
   renameSync(temp, path);
 }
 
-export function readDisabledProviders(): Set<string> {
-  const path = configPath();
+export function readDisabledProviders(ctx: ProfileContext = defaultProfileContext()): Set<string> {
+  const path = configPath(ctx);
   if (!existsSync(path)) return new Set();
   const doc = parseDocument(readFileSync(path, "utf8"));
   if (doc.errors.length > 0) throw new Error(`${path} is not valid YAML: ${doc.errors[0].message}`);
@@ -69,8 +70,8 @@ export function readDisabledProviders(): Set<string> {
  * like `org/model` under a still-live provider is never touched). Writes are
  * skipped when nothing changed so user files stay byte-identical.
  */
-export function pruneConfigProviderRefs(remainingProviders: readonly string[]): void {
-  const path = configPath();
+export function pruneConfigProviderRefs(remainingProviders: readonly string[], ctx: ProfileContext = defaultProfileContext()): void {
+  const path = configPath(ctx);
   if (!existsSync(path)) return;
   const source = readFileSync(path, "utf8");
   const doc = parseDocument(source);
@@ -133,8 +134,8 @@ export function pruneConfigProviderRefs(remainingProviders: readonly string[]): 
 }
 
 /** Re-enable a provider after a successful native OMP login. */
-export function enableProvider(provider: string): void {
-  const path = configPath();
+export function enableProvider(provider: string, ctx: ProfileContext = defaultProfileContext()): void {
+  const path = configPath(ctx);
   if (!existsSync(path)) return;
   const doc = parseDocument(readFileSync(path, "utf8"));
   if (doc.errors.length > 0) throw new Error(`${path} is not valid YAML: ${doc.errors[0].message}`);

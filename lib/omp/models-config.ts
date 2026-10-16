@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { basename, dirname, join } from "path";
 import { isMap, isScalar, isSeq, parseDocument, stringify, type Document } from "yaml";
 import { getModelsConfigPath } from "./paths";
+import { defaultProfileContext, type ProfileContext } from "./profile-context";
 import { isRecord } from "../type-guards";
 
 /**
@@ -150,8 +151,8 @@ function sanitizeModelsConfig(config: ModelsFileConfig): ModelsFileConfig {
 }
 
 /** Read models.yml, reporting rather than swallowing parse failures. */
-export function readModelsConfigFile(): ModelsConfigFile {
-  const path = getModelsConfigPath();
+export function readModelsConfigFile(ctx: ProfileContext = defaultProfileContext()): ModelsConfigFile {
+  const path = ctx.modelsConfigPath;
   if (!existsSync(path)) return { path, exists: false, config: { providers: {} } };
 
   let source: string;
@@ -185,8 +186,8 @@ export function readModelsConfigFile(): ModelsConfigFile {
 /** Tolerant read for consumers that only inspect the config (a broken file
  * reads as empty). Anything that writes the file back must go through
  * readModelsConfigFile()/writeModelsConfig() so a parse error blocks the write. */
-export function readModelsConfig(): ModelsFileConfig {
-  return readModelsConfigFile().config;
+export function readModelsConfig(ctx: ProfileContext = defaultProfileContext()): ModelsFileConfig {
+  return readModelsConfigFile(ctx).config;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -293,9 +294,12 @@ export interface WriteModelsConfigOptions {
    * the user has in the file, so only pass it on an explicit user request. */
   overwriteUnparseable?: boolean;
 }
-
-export function writeModelsConfig(config: ModelsFileConfig, options: WriteModelsConfigOptions = {}): void {
-  const current = readModelsConfigFile();
+export function writeModelsConfig(
+  config: ModelsFileConfig,
+  options: WriteModelsConfigOptions = {},
+  ctx: ProfileContext = defaultProfileContext(),
+): void {
+  const current = readModelsConfigFile(ctx);
   if (current.parseError && !options.overwriteUnparseable) {
     throw new ModelsConfigParseError(current.path, current.parseError);
   }

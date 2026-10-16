@@ -36,7 +36,7 @@ import type {
   SessionTreeNode,
 } from "../types";
 import { getArchivedSessionsDir, getBlobsDir, getSessionsDir } from "./paths";
-
+import { defaultProfileContext, type ProfileContext } from "./profile-context";
 /**
  * Pure-Node reader/writer for oh-my-pi's session JSONL files (format v3).
  * Ported from oh-my-pi packages/coding-agent/src/session/ (session-entries,
@@ -259,9 +259,9 @@ function parseBlobRef(data: string): string | null {
   return BLOB_HASH_RE.test(hash) ? hash : null;
 }
 
-function readBlobSync(hash: string): Buffer | null {
+function readBlobSync(hash: string, blobsDir: string = getBlobsDir()): Buffer | null {
   try {
-    return readFileSync(path.join(getBlobsDir(), hash));
+    return readFileSync(path.join(blobsDir, hash));
   } catch {
     return null;
   }
@@ -286,9 +286,9 @@ function degradeMissingBlobImage(block: Record<string, unknown>, hash: string): 
   delete block.source;
 }
 
-function resolveBlobsInValue(value: unknown, key: string | undefined): void {
+function resolveBlobsInValue(value: unknown, key: string | undefined, blobsDir?: string): void {
   if (Array.isArray(value)) {
-    for (const item of value) resolveBlobsInValue(item, key);
+    for (const item of value) resolveBlobsInValue(item, key, blobsDir);
     return;
   }
   if (!isRecord(value)) return;
@@ -301,7 +301,7 @@ function resolveBlobsInValue(value: unknown, key: string | undefined): void {
   ) {
     const hash = parseBlobRef(value.data);
     if (!hash) return;
-    const blob = readBlobSync(hash);
+    const blob = readBlobSync(hash, blobsDir);
     if (blob) record.data = blob.toString("base64");
     else degradeMissingBlobImage(record, hash);
     return;
@@ -313,22 +313,19 @@ function resolveBlobsInValue(value: unknown, key: string | undefined): void {
     isBlobRef(record.result)
   ) {
     const hash = parseBlobRef(record.result);
-    const blob = hash ? readBlobSync(hash) : null;
+    const blob = hash ? readBlobSync(hash, blobsDir) : null;
     if (blob) record.result = blob.toString("base64");
   }
-
   if (typeof record.image_url === "string" && isBlobRef(record.image_url)) {
     const hash = parseBlobRef(record.image_url);
-    const blob = hash ? readBlobSync(hash) : null;
-    // Externalized data URLs are stored as the raw UTF-8 data-URL string.
+    const blob = hash ? readBlobSync(hash, blobsDir) : null;
     if (blob) record.image_url = blob.toString("utf8");
   }
 
   for (const [childKey, item] of Object.entries(record)) {
-    resolveBlobsInValue(item, childKey);
+    resolveBlobsInValue(item, childKey, blobsDir);
   }
 }
-
 /** Cheap precheck so blob-free entries skip the resolution walk entirely. */
 function containsBlobRef(value: unknown): boolean {
   if (typeof value === "string") return isBlobRef(value);
@@ -347,6 +344,8 @@ export interface ResolveBlobOptions {
   /** Leave blob refs inside toolResult messages unresolved (the caller is about
    * to omit those images from the payload anyway). */
   skipToolResultImages?: boolean;
+  /** Optional blobs directory override; defaults to getBlobsDir(). */
+  blobsDir?: string;
 }
 
 /** Resolve blob references in loaded entries back to inline base64. Mutates in place. */
@@ -360,7 +359,7 @@ export function resolveBlobRefsInEntries(entries: SessionEntry[], options: Resol
       continue;
     }
     if (!containsBlobRef(entry)) continue;
-    resolveBlobsInValue(entry, undefined);
+    resolveBlobsInValue(entry, undefined, options.blobsDir);
   }
 }
 
@@ -506,7 +505,10 @@ export function loadSessionFile(filePath: string, options: LoadSessionOptions = 
   }
 
   if (options.resolveBlobs) {
-    resolveBlobRefsInEntries(entries, { skipToolResultImages: options.skipToolResultImages });
+    resolveBlobRefsInEntries(entries, {
+      skipToolResultImages: options.skipToolResultImages,
+      blobsDir: options.blobsDir,
+    });
   }
 
   return { header, entries, titleSlot };
@@ -977,25 +979,26 @@ function getSessionScanCache(): Map<string, SessionScanCacheEntry> {
 /** scanSessionInfo memoized on (path, size, mtimeMs). Callers must treat the
  * returned info as immutable — cache hits share one object. */
 function scanSessionInfoCached(filePath: string): OmpSessionInfo | undefined {
+  const resolvedPath = path.resolve(filePath);
   let stat: { size: number; mtimeMs: number };
   try {
-    stat = statSync(filePath);
+    stat = statSync(resolvedPath);
   } catch {
     return undefined;
   }
   const cache = getSessionScanCache();
-  const cached = cache.get(filePath);
+  const cached = cache.get(resolvedPath);
   if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
-    cache.delete(filePath);
-    cache.set(filePath, cached);
+    cache.delete(resolvedPath);
+    cache.set(resolvedPath, cached);
     return cached.info;
   }
-  if (cached) cache.delete(filePath);
-  const info = scanSessionInfo(filePath, true);
+  if (cached) cache.delete(resolvedPath);
+  const info = scanSessionInfo(resolvedPath, true);
   // Failed scans are not negatively cached: a transient read error must not
   // hide a session until its next mtime bump.
   if (info) {
-    cache.set(filePath, { size: stat.size, mtimeMs: stat.mtimeMs, info });
+    cache.set(resolvedPath, { size: stat.size, mtimeMs: stat.mtimeMs, info });
     while (cache.size > MAX_SESSION_SCAN_CACHE_ENTRIES) {
       const oldestKey = cache.keys().next().value;
       if (oldestKey === undefined) break;
@@ -1018,8 +1021,10 @@ function scanSessionInfoCached(filePath: string): OmpSessionInfo | undefined {
  * requests (sidebar poll, page loads) into a single stat. Per-file scanning is
  * still memoized by scanSessionInfoCached on (size, mtimeMs).
  */
-export async function listAllSessionInfos(): Promise<OmpSessionInfo[]> {
-  const sessionsRoot = getSessionsDir();
+export async function listAllSessionInfos(
+  ctx: ProfileContext = defaultProfileContext(),
+): Promise<OmpSessionInfo[]> {
+  const sessionsRoot = ctx.sessionsDir;
   // R10 read path: the Rust host is the session-projection authority when the
   // Rust backend is active (default). Phase 1 "No Hidden Fallback": a failed
   // scan is a recorded, structured error — the Node scanner only runs in the
@@ -1029,7 +1034,7 @@ export async function listAllSessionInfos(): Promise<OmpSessionInfo[]> {
       // Route 2 (doc 16): the host is reachable only through the typed
       // HostClient boundary (host-client.ts).
       const { hostClient } = await import("./host-client");
-      const projections = await hostClient.sessions.scan(sessionsRoot);
+      const projections = await hostClient.sessions.scan(sessionsRoot, ctx);
       const sessions: OmpSessionInfo[] = projections.map((p) => ({
         path: p.path,
         id: p.id,
@@ -1303,6 +1308,8 @@ export interface SessionArchiveRoots {
   sessionsRoot?: string;
   /** Override the OMP archive root for tests or an injected filesystem. */
   archiveRoot?: string;
+  /** Optional profile context to derive roots from. */
+  ctx?: ProfileContext;
 }
 
 /**
@@ -1313,7 +1320,7 @@ export interface SessionArchiveRoots {
  * is durably renamed; failures roll back both moves where possible.
  */
 export function archiveSessionFileWithArtifacts(filePath: string, roots: SessionArchiveRoots = {}): string {
-  const sessionsRoot = path.resolve(roots.sessionsRoot ?? getSessionsDir());
+  const sessionsRoot = path.resolve(roots.sessionsRoot ?? roots.ctx?.sessionsDir ?? getSessionsDir());
   const source = path.resolve(filePath);
   const relative = path.relative(sessionsRoot, source);
   if (
@@ -1326,7 +1333,7 @@ export function archiveSessionFileWithArtifacts(filePath: string, roots: Session
   }
   if (!lstatSync(source).isFile()) throw new Error("Session path is not a regular file");
 
-  const archiveRoot = path.resolve(roots.archiveRoot ?? getArchivedSessionsDir());
+  const archiveRoot = path.resolve(roots.archiveRoot ?? roots.ctx?.archivedSessionsDir ?? getArchivedSessionsDir());
   const destination = path.join(archiveRoot, `${relative}.gz`);
   const legacyDestination = destination.slice(0, -3);
   if (existsSync(destination) || existsSync(legacyDestination)) {

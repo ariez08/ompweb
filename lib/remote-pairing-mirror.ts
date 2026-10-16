@@ -10,10 +10,11 @@
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { join } from "path";
-import { getAgentDir } from "./omp/paths";
+import { getAgentDir, envScope } from "./omp/paths";
 import { hostClient } from "./omp/host-client";
 
-const MIRROR_PATH = () => join(getAgentDir(), "remote-pairing.json");
+// GLOBAL by design: Remote pairing is access-security infrastructure shared across profiles.
+const MIRROR_PATH = () => join(getAgentDir(envScope()), "remote-pairing.json");
 
 interface PairingJsonShape {
   config?: Record<string, unknown>;

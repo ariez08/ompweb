@@ -3,7 +3,7 @@ import { isApiRequestOriginAllowed, shouldCheckApiRequestOrigin } from "@/lib/re
 import { isValidWebSession, isWebPasswordEnabled, OMP_WEB_SESSION_COOKIE } from "@/lib/web-auth";
 import { readFileSync, statSync } from "fs";
 import { join } from "path";
-import { getAgentDir } from "@/lib/omp/paths";
+import { getAgentDir, envScope } from "@/lib/omp/paths";
 import { verifiedRequestPeer } from "./bin/request-peer";
 
 /**
@@ -31,7 +31,8 @@ interface PairingFileState {
 let pairingCache: { mtimeMs: number; state: PairingFileState } | null = null;
 
 function readPairingState(): PairingFileState | null {
-  const path = join(getAgentDir(), "remote-pairing.json");
+  // GLOBAL by design: Remote pairing is access-security infrastructure shared across profiles.
+  const path = join(getAgentDir(envScope()), "remote-pairing.json");
   try {
     const mtimeMs = statSync(path).mtimeMs;
     if (pairingCache && pairingCache.mtimeMs === mtimeMs) return pairingCache.state;

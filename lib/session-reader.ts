@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "fs";
 import { normalize as normalizePath } from "path";
 import { getAgentDir } from "./omp/paths";
+import { defaultProfileContext, type ProfileContext } from "./omp/profile-context";
 import {
   invalidateSessionFileListCache,
   listAllSessionInfos,
@@ -43,8 +44,8 @@ function matchParentSessionId(
   return knownIds.has(parentSession) ? parentSession : undefined;
 }
 
-async function loadAllSessions(): Promise<SessionInfo[]> {
-  const ompSessions: OmpSessionInfo[] = await listAllSessionInfos();
+async function loadAllSessions(ctx: ProfileContext): Promise<SessionInfo[]> {
+  const ompSessions: OmpSessionInfo[] = await listAllSessionInfos(ctx);
   const pathToId = new Map<string, string>();
   const knownIds = new Set<string>();
   for (const s of ompSessions) {
@@ -75,7 +76,7 @@ async function loadAllSessions(): Promise<SessionInfo[]> {
     // they cannot appear as a misleading `(no messages)` row.
     .filter(isUserVisibleSession)
     .map((s) => {
-    cacheSessionPath(s.id, s.path);
+    cacheSessionPath(s.id, s.path, ctx);
     const project = s.cwd ? projectByCwd.get(s.cwd) : undefined;
     return {
       path: s.path,
@@ -108,38 +109,43 @@ export function isUserVisibleSession(session: Pick<OmpSessionInfo, "messageCount
   return session.messageCount > 0 || (firstMessage.length > 0 && firstMessage !== "(no messages)");
 }
 
-export async function listAllSessions(): Promise<SessionInfo[]> {
-  const generation = globalThis.__piSessionListGeneration ?? 0;
+export async function listAllSessions(ctx: ProfileContext = defaultProfileContext()): Promise<SessionInfo[]> {
+  // Every cache below is keyed by profile: one ompweb process serves several
+  // profiles, and a shared entry would hand profile B profile A's session list.
+  const caches = sessionListCaches();
+  const generation = caches.generation.get(ctx.key) ?? 0;
 
   // Return cached result if still fresh (avoids re-scanning session files
   // and re-spawning git processes on every page load).
-  if (globalThis.__piSessionListCache && Date.now() - globalThis.__piSessionListCache.ts < SESSION_LIST_CACHE_TTL_MS) {
-    return globalThis.__piSessionListCache.data;
+  const cached = caches.data.get(ctx.key);
+  if (cached && Date.now() - cached.ts < SESSION_LIST_CACHE_TTL_MS) {
+    return cached.data;
   }
 
   // Coalescing dedup: concurrent callers share the same in-flight promise
   // only while it belongs to the current cache generation.
-  if (globalThis.__piSessionListPromise && globalThis.__piSessionListPromiseGeneration === generation) {
-    return globalThis.__piSessionListPromise;
+  const inflight = caches.promise.get(ctx.key);
+  if (inflight && caches.promiseGeneration.get(ctx.key) === generation) {
+    return inflight;
   }
 
-  const loadPromise = loadAllSessions().then((data) => {
+  const loadPromise = loadAllSessions(ctx).then((data) => {
     // An invalidation may happen while the scan is in flight. Do not let that
     // older result repopulate the cache after a session mutation.
-    if ((globalThis.__piSessionListGeneration ?? 0) === generation) {
-      globalThis.__piSessionListCache = { data, ts: Date.now() };
+    if ((caches.generation.get(ctx.key) ?? 0) === generation) {
+      caches.data.set(ctx.key, { data, ts: Date.now() });
     }
     return data;
   });
   const trackedPromise = loadPromise.finally(() => {
-    if (globalThis.__piSessionListPromise === trackedPromise) {
-      globalThis.__piSessionListPromise = undefined;
-      globalThis.__piSessionListPromiseGeneration = undefined;
+    if (caches.promise.get(ctx.key) === trackedPromise) {
+      caches.promise.delete(ctx.key);
+      caches.promiseGeneration.delete(ctx.key);
     }
   });
 
-  globalThis.__piSessionListPromise = trackedPromise;
-  globalThis.__piSessionListPromiseGeneration = generation;
+  caches.promise.set(ctx.key, trackedPromise);
+  caches.promiseGeneration.set(ctx.key, generation);
   return trackedPromise;
 }
 
@@ -147,19 +153,50 @@ export async function listAllSessions(): Promise<SessionInfo[]> {
 // Session path caches, stored in globalThis for hot-reload safety.
 // ============================================================================
 declare global {
+  // Keys are profile-prefixed (`${ctx.key}:<id|pathKey>`); see scopedPathCache.
   var __piSessionPathCache: Map<string, string> | undefined;
   var __piPathToSessionIdCache: Map<string, string> | undefined;
-  var __piSessionListPromise: Promise<SessionInfo[]> | undefined;
-  var __piSessionListPromiseGeneration: number | undefined;
-  var __piSessionListGeneration: number | undefined;
-  var __piSessionListCache: { data: SessionInfo[]; ts: number } | undefined;
+  // Profile-keyed session list caches (multi-profile live). One shared entry
+  // would leak one profile's list into another profile's request.
+  var __piSessionListPromise: Map<string, Promise<SessionInfo[]>> | undefined;
+  var __piSessionListPromiseGeneration: Map<string, number> | undefined;
+  var __piSessionListGeneration: Map<string, number> | undefined;
+  var __piSessionListCache: Map<string, { data: SessionInfo[]; ts: number }> | undefined;
 }
 
 const SESSION_LIST_CACHE_TTL_MS = 30_000;
 
+function sessionListCaches(): {
+  data: Map<string, { data: SessionInfo[]; ts: number }>;
+  promise: Map<string, Promise<SessionInfo[]>>;
+  promiseGeneration: Map<string, number>;
+  generation: Map<string, number>;
+} {
+  if (!globalThis.__piSessionListCache) globalThis.__piSessionListCache = new Map();
+  if (!globalThis.__piSessionListPromise) globalThis.__piSessionListPromise = new Map();
+  if (!globalThis.__piSessionListPromiseGeneration) globalThis.__piSessionListPromiseGeneration = new Map();
+  if (!globalThis.__piSessionListGeneration) globalThis.__piSessionListGeneration = new Map();
+  return {
+    data: globalThis.__piSessionListCache,
+    promise: globalThis.__piSessionListPromise,
+    promiseGeneration: globalThis.__piSessionListPromiseGeneration,
+    generation: globalThis.__piSessionListGeneration,
+  };
+}
+
+/** Invalidate every profile's list cache. Deliberately global: a mutation on
+ * one profile can also change cross-profile aggregate views, and
+ * over-invalidation only costs a rescan. */
 export function invalidateSessionListCache(): void {
-  globalThis.__piSessionListGeneration = (globalThis.__piSessionListGeneration ?? 0) + 1;
-  globalThis.__piSessionListCache = undefined;
+  const caches = sessionListCaches();
+  // Bump every profile's generation rather than clearing it: a reset to 0
+  // would let an in-flight scan from before the invalidation look like it
+  // belongs to the current generation and repopulate the cache with the list
+  // it read before the mutation.
+  for (const [key, value] of caches.generation) caches.generation.set(key, value + 1);
+  caches.data.clear();
+  caches.promise.clear();
+  caches.promiseGeneration.clear();
   // The session-file walk cache keys on the sessions-root mtime, which does
   // not change when a file is added inside an existing project subdirectory
   // (Windows/NTFS). Clear it too so new sessions appear immediately.
@@ -170,64 +207,128 @@ export function invalidateSessionListCache(): void {
   globalThis.__ompSessionEntriesCache?.clear();
 }
 
-function getPathCache(): Map<string, string> {
+// KNOWN PRE-EXISTING FAILURE (verified identical on baseline d5d0614 in a
+// clean worktree, not caused by profile scoping):
+// "links forked children whose parentSession is a bare session id" — the test
+// points PI_CODING_AGENT_DIR at a temp dir, listAllSessions() boots the Rust
+// host which opens <agentDir>/ompweb/runtime.db inside it, and the host stays
+// resident (release() deliberately keeps it for the service lifetime), so the
+// teardown rmSync hits EPERM on Windows. Passes with OMPWEB_BACKEND=node.
+// Fixing it means either an injectable journal path per session root or a
+// host shutdown hook in the test — out of scope for this refactor.
+
+/**
+ * Profile-scoped view over one of the two global path caches. The Maps stay
+ * global (hot-reload safety); only the KEYS carry the profile.
+ *
+ * Both directions are prefixed:
+ *
+ * - forward (`sessionId -> filePath`): a bare session id is NOT unique across
+ *   profiles. ids are generated per profile tree, so two profiles can hold the
+ *   same id and an unprefixed entry would answer profile A's request with
+ *   profile B's file path — the agent routes then spawn `omp --resume` against
+ *   that path and write into the wrong profile.
+ * - reverse (`filePath -> sessionId`): absolute session file paths are already
+ *   profile-disjoint (each profile derives its own sessionsDir from its own
+ *   agentDir), so this cache could not leak on its own. It is prefixed anyway
+ *   for two concrete reasons: `cacheSessionPath` / `invalidateSessionPathCache`
+ *   maintain the forward<->reverse invariant by feeding an id read out of the
+ *   reverse map straight into the forward map, so an asymmetric key scheme
+ *   would make that cross-lookup wrong; and `resolveSessionIdByPath` takes a
+ *   caller-supplied path, so the prefix is what turns "path belonging to
+ *   another profile" into a miss instead of a resolved foreign session id.
+ */
+interface ScopedPathCache {
+  get(key: string): string | undefined;
+  set(key: string, value: string): void;
+  delete(key: string): void;
+}
+
+function scopedPathCache(store: Map<string, string>, ctx: ProfileContext): ScopedPathCache {
+  const prefix = `${ctx.key}:`;
+  return {
+    get: (key) => store.get(prefix + key),
+    set: (key, value) => {
+      store.set(prefix + key, value);
+    },
+    delete: (key) => {
+      store.delete(prefix + key);
+    },
+  };
+}
+
+function getPathCache(ctx: ProfileContext = defaultProfileContext()): ScopedPathCache {
   if (!globalThis.__piSessionPathCache) globalThis.__piSessionPathCache = new Map();
-  return globalThis.__piSessionPathCache;
+  return scopedPathCache(globalThis.__piSessionPathCache, ctx);
 }
 
-function getPathToIdCache(): Map<string, string> {
+function getPathToIdCache(ctx: ProfileContext = defaultProfileContext()): ScopedPathCache {
   if (!globalThis.__piPathToSessionIdCache) globalThis.__piPathToSessionIdCache = new Map();
-  return globalThis.__piPathToSessionIdCache;
+  return scopedPathCache(globalThis.__piPathToSessionIdCache, ctx);
 }
 
-export async function resolveSessionPath(sessionId: string): Promise<string | null> {
-  const cached = getPathCache().get(sessionId);
+export async function resolveSessionPath(
+  sessionId: string,
+  ctx: ProfileContext = defaultProfileContext(),
+): Promise<string | null> {
+  const cached = getPathCache(ctx).get(sessionId);
   if (cached) {
     if (existsSync(cached)) return cached;
     // A deleted session must never resolve: callers spawn omp with --resume
     // against the path, and omp silently creates a NEW session when the file
     // is gone. Drop the stale entry (and the list snapshot that produced it).
-    invalidateSessionPathCache(sessionId);
+    invalidateSessionPathCache(sessionId, ctx);
     invalidateSessionListCache();
   }
 
   // Cache miss: scan all sessions to populate cache, then retry
-  await listAllSessions();
-  const resolved = getPathCache().get(sessionId);
+  await listAllSessions(ctx);
+  const resolved = getPathCache(ctx).get(sessionId);
   if (!resolved) return null;
   if (!existsSync(resolved)) {
-    invalidateSessionPathCache(sessionId);
+    invalidateSessionPathCache(sessionId, ctx);
     return null;
   }
   return resolved;
 }
 
-export async function resolveSessionIdByPath(filePath: string): Promise<string | undefined> {
+export async function resolveSessionIdByPath(
+  filePath: string,
+  ctx: ProfileContext = defaultProfileContext(),
+): Promise<string | undefined> {
   const pathKey = sessionPathKey(filePath);
-  const cached = getPathToIdCache().get(pathKey);
+  const reverse = getPathToIdCache(ctx);
+  const cached = reverse.get(pathKey);
   if (cached) return cached;
 
-  await listAllSessions();
-  return getPathToIdCache().get(pathKey);
+  await listAllSessions(ctx);
+  return reverse.get(pathKey);
 }
 
 /**
  * Resolve a `header.parentSession` value (either a session file path or a bare
  * session id — see matchParentSessionId) to the parent's session id.
  */
-export async function resolveParentSessionId(parentSession: string): Promise<string | undefined> {
+export async function resolveParentSessionId(
+  parentSession: string,
+  ctx: ProfileContext = defaultProfileContext(),
+): Promise<string | undefined> {
   if (!parentSession) return undefined;
-  const byPath = await resolveSessionIdByPath(parentSession);
+  const byPath = await resolveSessionIdByPath(parentSession, ctx);
   if (byPath) return byPath;
   // Id form: only accept it when a session file with that id still exists.
-  return (await resolveSessionPath(parentSession)) ? parentSession : undefined;
+  return (await resolveSessionPath(parentSession, ctx)) ? parentSession : undefined;
 }
 
-export function cacheSessionPath(sessionId: string, filePath: string): void {
+export function cacheSessionPath(
+  sessionId: string,
+  filePath: string,
+  ctx: ProfileContext = defaultProfileContext(),
+): void {
   const normalizedPath = normalizePath(filePath);
   const pathKey = sessionPathKey(normalizedPath);
-  const pathCache = getPathCache();
-  const reverseCache = getPathToIdCache();
+  const pathCache = getPathCache(ctx);
+  const reverseCache = getPathToIdCache(ctx);
   const previousPath = pathCache.get(sessionId);
   const previousPathKey = previousPath ? sessionPathKey(previousPath) : undefined;
   const previousSessionId = reverseCache.get(pathKey);
@@ -247,9 +348,12 @@ export function cacheSessionPath(sessionId: string, filePath: string): void {
   reverseCache.set(pathKey, sessionId);
 }
 
-export function invalidateSessionPathCache(sessionId: string): void {
-  const pathCache = getPathCache();
-  const reverseCache = getPathToIdCache();
+export function invalidateSessionPathCache(
+  sessionId: string,
+  ctx: ProfileContext = defaultProfileContext(),
+): void {
+  const pathCache = getPathCache(ctx);
+  const reverseCache = getPathToIdCache(ctx);
   const filePath = pathCache.get(sessionId);
   pathCache.delete(sessionId);
   const pathKey = filePath ? sessionPathKey(filePath) : undefined;

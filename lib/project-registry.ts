@@ -3,6 +3,7 @@ import { homedir } from "os";
 import { isAbsolute, resolve } from "path";
 import { comparableProjectPath } from "./comparable-path";
 import { getAgentDir } from "./omp/paths";
+import { defaultProfileContext, type ProfileContext } from "./omp/profile-context";
 import type { ManagedProject } from "./types";
 
 // ============================================================================
@@ -84,8 +85,8 @@ export function parseProjectRegistry(raw: string): ProjectRegistryFile {
   }
 }
 
-export function loadProjectRegistry(): ProjectRegistryFile {
-  const registryPath = resolve(getAgentDir(), "projects.json");
+export function loadProjectRegistry(ctx: ProfileContext = defaultProfileContext()): ProjectRegistryFile {
+  const registryPath = resolve(ctx.agentDir, "projects.json");
   if (!existsSync(registryPath)) return EMPTY_REGISTRY;
   try {
     return parseProjectRegistry(readFileSync(registryPath, "utf8"));
@@ -96,8 +97,8 @@ export function loadProjectRegistry(): ProjectRegistryFile {
 
 /** Atomic persistence: write a temp file in the same directory, then rename
  *  over the registry. A crash mid-write leaves the previous registry intact. */
-export function saveProjectRegistry(registry: ProjectRegistryFile): void {
-  const registryPath = resolve(getAgentDir(), "projects.json");
+export function saveProjectRegistry(registry: ProjectRegistryFile, ctx: ProfileContext = defaultProfileContext()): void {
+  const registryPath = resolve(ctx.agentDir, "projects.json");
   mkdirSync(resolve(registryPath, ".."), { recursive: true });
   const temp = `${registryPath}.tmp-${process.pid}-${Date.now()}`;
   try {

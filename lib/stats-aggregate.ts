@@ -7,9 +7,9 @@
  * the database holds valid message rows; this module gives the UI correct
  * numbers without depending on that CLI behavior.
  */
-import { homedir } from "os";
 import { join } from "path";
 import { existsSync } from "fs";
+import { defaultProfileContext, type ProfileContext } from "./omp/profile-context";
 
 export interface StatsOverall {
   totalRequests: number;
@@ -103,8 +103,8 @@ interface DbMessageRow {
  * Returns null when the database is absent/unreadable/empty so callers can
  * keep their own fallback chain intact.
  */
-export async function aggregateFromStatsDb(): Promise<StatsDbAggregate | null> {
-  const dbPath = join(homedir(), ".omp", "stats.db");
+export async function aggregateFromStatsDb(ctx: ProfileContext = defaultProfileContext()): Promise<StatsDbAggregate | null> {
+  const dbPath = join(ctx.configRoot, "stats.db");
   if (!existsSync(dbPath)) return null;
   let db: InstanceType<typeof import("node:sqlite").DatabaseSync> | null = null;
   try {

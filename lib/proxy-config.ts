@@ -1,3 +1,4 @@
+import { getAgentDir, envScope } from "./omp/paths";
 import { execFileSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { homedir } from "os";
@@ -29,7 +30,8 @@ export interface ProxyDetection {
   manualReachable: boolean;
 }
 
-const CONFIG_PATH = join(homedir(), ".omp", "agent", "proxy.json");
+// GLOBAL by design: Network proxy configuration is infrastructure-level and shared across profiles.
+const CONFIG_PATH = join(getAgentDir(envScope()), "proxy.json");
 const COMMON_PORTS = [7890, 7897, 1087, 1080, 8118, 8888];
 
 export function readProxyConfig(): ProxyConfig {

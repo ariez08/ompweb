@@ -3,7 +3,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, 
 import { homedir } from "os";
 import { basename, dirname, join, relative, resolve, sep } from "path";
 import { stripAnsi } from "../ansi";
-import { getAgentDir } from "./paths";
+import { defaultProfileContext, type ProfileContext } from "./profile-context";
 import { isRecord } from "../type-guards";
 
 const MAX_MCP_CONFIG_BYTES = 512 * 1024;
@@ -37,13 +37,13 @@ export type BuiltinMcpPreset = {
 };
 
 /** Locate the native bundled vendor/agent-mcp server entrypoint */
-export function getBuiltinAgentMcpPath(cwd?: string): string | null {
+export function getBuiltinAgentMcpPath(cwd?: string, ctx: ProfileContext = defaultProfileContext()): string | null {
   const roots = [
     ...(cwd ? [resolve(cwd, "vendor", "agent-mcp", "mcp_server.py")] : []),
     resolve(process.cwd(), "vendor", "agent-mcp", "mcp_server.py"),
     resolve(__dirname, "..", "..", "vendor", "agent-mcp", "mcp_server.py"),
     join(homedir(), "code", "agent-mcp", "mcp_server.py"),
-    join(getAgentDir(), "agent-mcp", "mcp_server.py"),
+    join(ctx.agentDir, "agent-mcp", "mcp_server.py"),
   ];
   for (const candidate of roots) {
     if (existsSync(candidate)) return candidate;
@@ -51,8 +51,8 @@ export function getBuiltinAgentMcpPath(cwd?: string): string | null {
   return null;
 }
 
-export function getBuiltinMcpPresets(cwd?: string): BuiltinMcpPreset[] {
-  const agentMcpPath = getBuiltinAgentMcpPath(cwd);
+export function getBuiltinMcpPresets(cwd?: string, ctx: ProfileContext = defaultProfileContext()): BuiltinMcpPreset[] {
+  const agentMcpPath = getBuiltinAgentMcpPath(cwd, ctx);
   const resolvedTarget = agentMcpPath || resolve(process.cwd(), "vendor", "agent-mcp", "mcp_server.py");
   return [
     {
@@ -123,7 +123,14 @@ function readMcpUserConfig(path: string): McpUserConfig {
 /** OMP's active user-level server configuration. This is deliberately separate
  * from compatibility providers such as Claude Code, which do not describe the
  * MCP connections owned by OMP. */
-export function readUserMcpConfig(path = join(getAgentDir(), "mcp.json")): McpUserConfig {
+export function readUserMcpConfig(
+  pathOrCtx?: string | ProfileContext,
+  maybeCtx?: ProfileContext,
+): McpUserConfig {
+  const ctx = typeof pathOrCtx === "object" && pathOrCtx !== null && "agentDir" in pathOrCtx
+    ? pathOrCtx
+    : (maybeCtx ?? defaultProfileContext());
+  const path = typeof pathOrCtx === "string" ? pathOrCtx : join(ctx.agentDir, "mcp.json");
   return readMcpUserConfig(path);
 }
 
@@ -415,10 +422,15 @@ export function deleteMcpServer(cwd: string, name: string): { path: string } {
   });
 }
 
-export function writeUserMcpServer(name: string, server: McpServer, previousName?: string): { path: string } {
+export function writeUserMcpServer(
+  name: string,
+  server: McpServer,
+  previousName?: string,
+  ctx: ProfileContext = defaultProfileContext(),
+): { path: string } {
   validateMcpServer(name, server);
   if (previousName !== undefined && !SERVER_NAME.test(previousName)) throw new Error("Invalid previous server name");
-  const userPath = join(getAgentDir(), "mcp.json");
+  const userPath = join(ctx.agentDir, "mcp.json");
   return withMcpConfigLock(userPath, () => {
     let currentConfig: McpFile = {};
     if (existsSync(userPath)) {

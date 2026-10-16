@@ -5,6 +5,7 @@ import path from "path";
 import type { Dirent } from "fs";
 import type { SessionHeader } from "../types";
 import { getArchivedSessionsDir, getSessionsDir } from "./paths";
+import { defaultProfileContext, type ProfileContext } from "./profile-context";
 import { invalidateSessionFileListCache, loadSessionFile, type SessionStatus } from "./session-files";
 
 export interface ArchivedSessionRecord {
@@ -143,8 +144,11 @@ function parseArchivePrefix(prefix: Buffer, filePath: string, archiveRoot: strin
   }
 }
 
-export async function listArchivedSessions(archiveRoot = getArchivedSessionsDir()): Promise<ArchivedSessionRecord[]> {
-  const root = archiveRootPath(archiveRoot);
+export async function listArchivedSessions(
+  archiveRoot?: string,
+  ctx: ProfileContext = defaultProfileContext(),
+): Promise<ArchivedSessionRecord[]> {
+  const root = archiveRootPath(archiveRoot ?? ctx.archivedSessionsDir);
   const files = collectArchives(root);
   const records = await Promise.all(files.map(async (filePath) => {
     try {
@@ -157,9 +161,14 @@ export async function listArchivedSessions(archiveRoot = getArchivedSessionsDir(
   return records.filter((record): record is ArchivedSessionRecord => Boolean(record)).sort((a, b) => b.archivedAt.getTime() - a.archivedAt.getTime());
 }
 
-export function restoreArchivedSession(key: string, sessionsRoot = getSessionsDir(), archiveRoot = getArchivedSessionsDir()): string {
-  const activeRoot = archiveRootPath(sessionsRoot);
-  const archiveBase = archiveRootPath(archiveRoot);
+export function restoreArchivedSession(
+  key: string,
+  sessionsRoot?: string,
+  archiveRoot?: string,
+  ctx: ProfileContext = defaultProfileContext(),
+): string {
+  const activeRoot = archiveRootPath(sessionsRoot ?? ctx.sessionsDir);
+  const archiveBase = archiveRootPath(archiveRoot ?? ctx.archivedSessionsDir);
   const relative = normalizeArchiveKey(key);
   const source = path.resolve(archiveBase, relative);
   const destination = path.resolve(activeRoot, relative.slice(0, -3));

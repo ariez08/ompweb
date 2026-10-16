@@ -3,6 +3,7 @@ import { homedir } from "os";
 import * as path from "path";
 import { parse as parseYaml } from "yaml";
 import { getAgentDir } from "@/lib/omp/paths";
+import { defaultProfileContext, type ProfileContext } from "@/lib/omp/profile-context";
 import type { SkillInfo } from "@/lib/api-types";
 import { annotateSkillsWithInstallInfo } from "@/lib/skill-lock";
 
@@ -80,9 +81,9 @@ function getAncestorDirs(cwd: string): string[] {
 
 /** Scan roots in omp's provider priority order (highest first): .omp (100),
  * .claude (80), .agent/.agents + .codex + .github (70), managed skills (5). */
-function buildScanRoots(cwd: string): SkillScanRoot[] {
+function buildScanRoots(cwd: string, ctx: ProfileContext = defaultProfileContext()): SkillScanRoot[] {
   const home = homedir();
-  const agentDir = getAgentDir();
+  const agentDir = ctx.agentDir;
   const ancestors = getAncestorDirs(cwd);
   const projectAncestors = ancestors.filter((dir) => dir !== home);
   const roots: SkillScanRoot[] = [];
@@ -126,8 +127,8 @@ function buildScanRoots(cwd: string): SkillScanRoot[] {
  * skill path (single source of truth with buildScanRoots — a narrower list
  * would reject skills the app itself discovered and installed). Without a cwd
  * only the cwd-independent user-scope roots are returned. */
-export function getSkillScanRootDirs(cwd?: string): string[] {
-  return buildScanRoots(cwd ?? homedir()).map((root) => root.dir);
+export function getSkillScanRootDirs(cwd?: string, ctx: ProfileContext = defaultProfileContext()): string[] {
+  return buildScanRoots(cwd ?? homedir(), ctx).map((root) => root.dir);
 }
 
 const DISABLE_INVOCATION_KEYS = ["disable-model-invocation", "disableModelInvocation", "hide"] as const;
@@ -235,10 +236,10 @@ async function scanRoot(root: SkillScanRoot, diagnostics: SkillDiagnostic[]): Pr
 
 /** Discover skills for a cwd the way omp does. Name collisions resolve to the
  * highest-priority provider (scan-root order); result is sorted by name. */
-export async function discoverSkills(cwd: string): Promise<SkillsWithDiagnostics> {
+export async function discoverSkills(cwd: string, ctx: ProfileContext = defaultProfileContext()): Promise<SkillsWithDiagnostics> {
   const diagnostics: SkillDiagnostic[] = [];
   const byName = new Map<string, SkillInfo>();
-  for (const root of buildScanRoots(cwd)) {
+  for (const root of buildScanRoots(cwd, ctx)) {
     for (const skill of await scanRoot(root, diagnostics)) {
       if (!byName.has(skill.name)) byName.set(skill.name, skill);
     }
@@ -250,10 +251,10 @@ export async function discoverSkills(cwd: string): Promise<SkillsWithDiagnostics
   return { skills, diagnostics };
 }
 
-export async function loadSkillsWithInstallInfo(cwd: string) {
-  const { skills, diagnostics } = await discoverSkills(cwd);
+export async function loadSkillsWithInstallInfo(cwd: string, ctx: ProfileContext = defaultProfileContext()) {
+  const { skills, diagnostics } = await discoverSkills(cwd, ctx);
   return {
-    skills: annotateSkillsWithInstallInfo(skills, { cwd, agentDir: getAgentDir() }),
+    skills: annotateSkillsWithInstallInfo(skills, { cwd, agentDir: ctx.agentDir }),
     diagnostics,
   };
 }

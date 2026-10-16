@@ -8,8 +8,8 @@
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { getSessionsDir } from "./omp/paths";
+import { defaultProfileContext, type ProfileContext } from "./omp/profile-context";
 
 export const USAGE_SUMMARY_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 export const USAGE_SUMMARY_TTL_MS = 2_000;
@@ -27,8 +27,7 @@ interface SummaryCache {
   expiresAt: number;
   summary: UsageSummary;
 }
-
-let cache: SummaryCache | null = null;
+const summaryCaches = new Map<string, SummaryCache>();
 
 interface ParsedFileEntry {
   input: number;
@@ -133,9 +132,9 @@ export function computeUsageSummary(
 }
 
 /** Fast query from ~/.omp/stats.db if available */
-export function getSummaryFromStatsDb(now = Date.now()): UsageSummary | null {
+export function getSummaryFromStatsDb(now = Date.now(), ctx: ProfileContext = defaultProfileContext()): UsageSummary | null {
   try {
-    const dbPath = join(homedir(), ".omp", "stats.db");
+    const dbPath = join(ctx.configRoot, "stats.db");
     if (!existsSync(dbPath)) return null;
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { DatabaseSync } = require("node:sqlite");
@@ -173,8 +172,8 @@ export function getSummaryFromStatsDb(now = Date.now()): UsageSummary | null {
 }
 
 /** List session files with their name-derived creation time. */
-export function listSessionFilesWithTime(): Array<{ path: string; fileTime: number }> {
-  const root = getSessionsDir();
+export function listSessionFilesWithTime(ctx: ProfileContext = defaultProfileContext()): Array<{ path: string; fileTime: number }> {
+  const root = ctx.sessionsDir;
   const out: Array<{ path: string; fileTime: number }> = [];
   let projectDirs: string[] = [];
   try {
@@ -206,23 +205,28 @@ export function listSessionFilesWithTime(): Array<{ path: string; fileTime: numb
   return out;
 }
 
-export async function getUsageSummary(): Promise<UsageSummary> {
+export async function getUsageSummary(ctx: ProfileContext = defaultProfileContext()): Promise<UsageSummary> {
   const now = Date.now();
-  if (cache && cache.expiresAt > now) return cache.summary;
+  const cached = summaryCaches.get(ctx.key);
+  if (cached && cached.expiresAt > now) return cached.summary;
 
-  const dbSummary = getSummaryFromStatsDb(now);
+  const dbSummary = getSummaryFromStatsDb(now, ctx);
   if (dbSummary) {
-    cache = { expiresAt: now + USAGE_SUMMARY_TTL_MS, summary: dbSummary };
+    summaryCaches.set(ctx.key, { expiresAt: now + USAGE_SUMMARY_TTL_MS, summary: dbSummary });
     return dbSummary;
   }
 
-  const files = listSessionFilesWithTime();
+  const files = listSessionFilesWithTime(ctx);
   const summary = computeUsageSummary(files, now);
-  cache = { expiresAt: now + USAGE_SUMMARY_TTL_MS, summary };
+  summaryCaches.set(ctx.key, { expiresAt: now + USAGE_SUMMARY_TTL_MS, summary });
   return summary;
 }
 
-export function clearUsageSummaryCache(): void {
-  cache = null;
+export function clearUsageSummaryCache(ctx?: ProfileContext): void {
+  if (ctx) {
+    summaryCaches.delete(ctx.key);
+  } else {
+    summaryCaches.clear();
+  }
   fileCache.clear();
 }

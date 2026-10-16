@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "path";
 import { isMap, parseDocument, stringify } from "yaml";
 import { getSettingsPath } from "./paths";
+import { defaultProfileContext, type ProfileContext } from "./profile-context";
 import { isRecord } from "../type-guards";
 
 export type NativeSettings = {
@@ -56,8 +57,8 @@ const COMPACTION_STRATEGIES = new Set(["snapcompact", "handoff", "context-full",
 const MEMORY_BACKENDS = new Set(["off", "local", "mnemopi", "hindsight"]);
 const MEMORY_SCOPES = new Set(["global", "per-project", "per-project-tagged"]);
 
-function configPath(): string {
-  return getSettingsPath();
+function configPath(ctx: ProfileContext = defaultProfileContext()): string {
+  return ctx.settingsPath;
 }
 
 function stringArray(value: unknown): string[] | undefined {
@@ -72,16 +73,16 @@ function assertOptionalBoolean(value: unknown, name: string): void {
   if (value !== undefined && typeof value !== "boolean") throw new Error(`${name} must be a boolean`);
 }
 
-function readDocument() {
-  const path = configPath();
+function readDocument(ctx: ProfileContext = defaultProfileContext()) {
+  const path = configPath(ctx);
   const doc = parseDocument(existsSync(path) ? readFileSync(path, "utf8") : "");
   if (doc.errors.length > 0) throw new Error(`${path} is not valid YAML: ${doc.errors[0].message}`);
   return { path, doc };
 }
 
 /** Returns the persisted native OMP values only; omitted keys keep OMP defaults. */
-export function readNativeSettings(): { path: string; settings: NativeSettings } {
-  const { path, doc } = readDocument();
+export function readNativeSettings(ctx: ProfileContext = defaultProfileContext()): { path: string; settings: NativeSettings } {
+  const { path, doc } = readDocument(ctx);
   const data = doc.toJS();
   if (!isRecord(data)) return { path, settings: {} };
   const advisor = isRecord(data.advisor) ? data.advisor : {};
@@ -208,7 +209,7 @@ function modelRolesRecord(value: unknown): Record<string, string> | undefined {
 }
 
 /** Validates and applies a reviewed subset of OMP's global config schema. */
-export function writeNativeSettings(settings: NativeSettings): void {
+export function writeNativeSettings(settings: NativeSettings, ctx: ProfileContext = defaultProfileContext()): void {
   if (!isRecord(settings)) throw new Error("Settings must be an object");
   assertOptionalRecord(settings.advisor, "advisor");
   assertOptionalRecord(settings.tools, "tools");
@@ -302,7 +303,7 @@ export function writeNativeSettings(settings: NativeSettings): void {
     if (values !== undefined && (!Array.isArray(values) || values.some((value) => typeof value !== "string" || !value.trim()))) throw new Error(`${key} must contain non-empty strings`);
   }
 
-  const { path, doc } = readDocument();
+  const { path, doc } = readDocument(ctx);
   mkdirSync(dirname(path), { recursive: true });
   if (doc.contents === null) {
     // The YAML key differs from the settings name for one field; map it

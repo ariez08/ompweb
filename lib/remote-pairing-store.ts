@@ -7,7 +7,7 @@
  */
 import { join } from "path";
 import { PairingService, type PairingConfig } from "./remote-pairing";
-import { getAgentDir } from "./omp/paths";
+import { getAgentDir, envScope } from "./omp/paths";
 
 const GLOBAL_KEY = "__ompWebPairingService__";
 
@@ -16,7 +16,8 @@ type GlobalWithPairing = typeof globalThis & { [GLOBAL_KEY]?: PairingService };
 export function getPairingService(): PairingService {
   const g = globalThis as GlobalWithPairing;
   if (!g[GLOBAL_KEY]) {
-    g[GLOBAL_KEY] = new PairingService({}, undefined, join(getAgentDir(), "remote-pairing.json"));
+    // GLOBAL by design: Remote pairing is access-security infrastructure shared across profiles.
+    g[GLOBAL_KEY] = new PairingService({}, undefined, join(getAgentDir(envScope()), "remote-pairing.json"));
   }
   return g[GLOBAL_KEY];
 }

@@ -6,7 +6,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { isRecord } from "../type-guards";
 import { resolveOmpBin } from "./omp-cli";
 import { getAgentsBundledCacheDir, getProjectAgentsDir, getUserAgentsDir } from "./paths";
-
+import { defaultProfileContext, type ProfileContext } from "./profile-context";
 export type AgentSource = "bundled" | "user" | "project";
 export type AgentInfo = {
   name: string;
@@ -70,17 +70,17 @@ export function parseAgentFrontmatter(content: string): ParsedAgentFrontmatter {
 
 type AgentScanRoot = { dir: string; source: AgentSource; scope: "user" | "project" | "bundled" };
 
-export function buildAgentScanRoots(cwd?: string): AgentScanRoot[] {
+export function buildAgentScanRoots(cwd?: string, ctx: ProfileContext = defaultProfileContext()): AgentScanRoot[] {
   const roots: AgentScanRoot[] = [
     { dir: getAgentsBundledCacheDir(), source: "bundled", scope: "bundled" },
   ];
   if (cwd) roots.push({ dir: getProjectAgentsDir(cwd), source: "project", scope: "project" });
-  roots.push({ dir: getUserAgentsDir(), source: "user", scope: "user" });
+  roots.push({ dir: ctx.userAgentsDir, source: "user", scope: "user" });
   return roots;
 }
 
-export function getAgentScanRootDirs(cwd?: string): string[] {
-  return buildAgentScanRoots(cwd).map((root) => root.dir);
+export function getAgentScanRootDirs(cwd?: string, ctx: ProfileContext = defaultProfileContext()): string[] {
+  return buildAgentScanRoots(cwd, ctx).map((root) => root.dir);
 }
 
 function asStringArray(value: unknown, field: string): string[] | undefined {
@@ -187,9 +187,12 @@ export async function ensureBundledAgentsCache(): Promise<string> {
   return cacheDir;
 }
 
-export async function discoverAgents(cwd?: string): Promise<{ agents: AgentInfo[]; diagnostics: AgentDiagnostic[]; bundledPath?: string }> {
+export async function discoverAgents(
+  cwd?: string,
+  ctx: ProfileContext = defaultProfileContext(),
+): Promise<{ agents: AgentInfo[]; diagnostics: AgentDiagnostic[]; bundledPath?: string }> {
   const diagnostics: AgentDiagnostic[] = [];
-  const roots = buildAgentScanRoots(cwd);
+  const roots = buildAgentScanRoots(cwd, ctx);
   const bundledPath = await ensureBundledAgentsCache();
   if (!resolveOmpBin()) diagnostics.push({ type: "error", message: "omp binary is not installed; bundled agents could not be unpacked" });
   const byName = new Map<string, AgentInfo>();
@@ -326,11 +329,15 @@ export function deleteAgent(scopeDir: string, name: string): { path: string } {
   return { path: filePath };
 }
 
-export function resolveAgentsScope(cwd: string | undefined, scope: "user" | "project"): string {
-  return scope === "user" ? getUserAgentsDir() : getProjectAgentsDir(cwd || homedir());
+export function resolveAgentsScope(
+  cwd: string | undefined,
+  scope: "user" | "project",
+  ctx: ProfileContext = defaultProfileContext(),
+): string {
+  return scope === "user" ? ctx.userAgentsDir : getProjectAgentsDir(cwd || homedir());
 }
 
-export function readAgentFile(filePath: string): AgentInfo | null {
+export function readAgentFile(filePath: string, ctx: ProfileContext = defaultProfileContext()): AgentInfo | null {
   try {
     if (statSync(filePath).size > MAX_AGENT_BYTES) return null;
     const content = readFileSync(filePath, "utf8");
@@ -339,7 +346,7 @@ export function readAgentFile(filePath: string): AgentInfo | null {
       return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
     };
     const bundled = isWithin(getAgentsBundledCacheDir());
-    const user = isWithin(getUserAgentsDir());
+    const user = isWithin(ctx.userAgentsDir);
     const source: AgentSource = bundled ? "bundled" : user ? "user" : "project";
     return infoFromContent(content, filePath, source, source);
   } catch { return null; }

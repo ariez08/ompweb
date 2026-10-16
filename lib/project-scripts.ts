@@ -1,7 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { join, dirname } from "path";
-import { homedir } from "os";
-
+import { defaultProfileContext, type ProfileContext } from "./omp/profile-context";
 /**
  * Project quick scripts (build / publish / start ...). Stored per project in
  * `<projectRoot>/.omp/scripts.json`, optionally merged with a global set in
@@ -23,7 +22,6 @@ interface ScriptsFile {
   scripts?: QuickScript[];
 }
 
-const GLOBAL_SCRIPTS_PATH = join(homedir(), ".omp", "agent", "scripts.json");
 
 export function validateQuickScripts(value: unknown): QuickScript[] | null {
   if (!Array.isArray(value)) return null;
@@ -60,9 +58,8 @@ function writeScriptsFile(filePath: string, scripts: QuickScript[]): void {
   writeFileSync(tmp, JSON.stringify({ scripts }, null, 2) + "\n");
   renameSync(tmp, filePath);
 }
-
-export function getGlobalScripts(): QuickScript[] {
-  return readScriptsFile(GLOBAL_SCRIPTS_PATH);
+export function getGlobalScripts(ctx: ProfileContext = defaultProfileContext()): QuickScript[] {
+  return readScriptsFile(join(ctx.agentDir, "scripts.json"));
 }
 
 export function getProjectScripts(projectRoot: string): QuickScript[] {
@@ -70,9 +67,9 @@ export function getProjectScripts(projectRoot: string): QuickScript[] {
 }
 
 /** Global + project scripts; project wins on name collisions. */
-export function listQuickScripts(projectRoot: string): QuickScript[] {
+export function listQuickScripts(projectRoot: string, ctx: ProfileContext = defaultProfileContext()): QuickScript[] {
   const byName = new Map<string, QuickScript>();
-  for (const s of getGlobalScripts()) byName.set(s.name, s);
+  for (const s of getGlobalScripts(ctx)) byName.set(s.name, s);
   for (const s of getProjectScripts(projectRoot)) byName.set(s.name, s);
   return [...byName.values()];
 }
