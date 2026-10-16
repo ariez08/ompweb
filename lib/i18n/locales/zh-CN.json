@@ -414,6 +414,7 @@
   "errors.path_required": "需要提供路径",
   "errors.plugin_unsupported_action": "不支持的插件操作",
   "errors.preview_unavailable": "此文件类型不支持预览",
+  "errors.profile_unknown": "未知的配置文件",
   "errors.provider_name_required": "需要提供提供商名称",
   "errors.provider_required": "需要提供提供商配置",
   "errors.query_required": "需要提供搜索关键词",
@@ -1625,4 +1626,9 @@
   "chatWindow.subagentsAll": "全部",
   "chatWindow.subagentsLive": "运行中"
   ,"chatWindow.subagentsNoMatches": "没有匹配的子代理"
+  ,"profile.label": "配置文件"
+  ,"profile.sessions": "会话"
+  ,"profile.models": "模型"
+  ,"profile.switchFailed": "无法切换配置文件"
+  ,"profile.readOnly": "只读：切换配置文件后才能打开此会话"
 }

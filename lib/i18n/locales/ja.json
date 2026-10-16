@@ -414,6 +414,7 @@
   "errors.path_required": "パスが必要です",
   "errors.plugin_unsupported_action": "サポートされていないプラグイン操作です",
   "errors.preview_unavailable": "このファイルタイプはプレビューできません",
+  "errors.profile_unknown": "プロファイルが不明です",
   "errors.provider_name_required": "プロバイダー名が必要です",
   "errors.provider_required": "プロバイダー設定が必要です",
   "errors.query_required": "検索クエリが必要です",
@@ -1625,4 +1626,9 @@
   "chatWindow.subagentsAll": "すべて",
   "chatWindow.subagentsLive": "実行中"
   ,"chatWindow.subagentsNoMatches": "一致するサブエージェントはありません"
+  ,"profile.label": "プロファイル"
+  ,"profile.sessions": "セッション"
+  ,"profile.models": "モデル"
+  ,"profile.switchFailed": "プロファイルを変更できませんでした"
+  ,"profile.readOnly": "読み取り専用：開くにはプロファイルを切り替えてください"
 }

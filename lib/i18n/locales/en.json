@@ -414,6 +414,7 @@
   "errors.path_required": "A path is required",
   "errors.plugin_unsupported_action": "Unsupported plugin action",
   "errors.preview_unavailable": "Preview is not available for this file type",
+  "errors.profile_unknown": "Unknown omp profile",
   "errors.provider_name_required": "A provider name is required",
   "errors.provider_required": "A provider config is required",
   "errors.query_required": "A search query is required",
@@ -1625,4 +1626,9 @@
   "chatWindow.subagentsAll": "All",
   "chatWindow.subagentsLive": "Live"
   ,"chatWindow.subagentsNoMatches": "No matching agents."
+  ,"profile.label": "Profile"
+  ,"profile.sessions": "sessions"
+  ,"profile.models": "models"
+  ,"profile.switchFailed": "Could not switch profile"
+  ,"profile.readOnly": "Read-only: switch profile to open this session"
 }

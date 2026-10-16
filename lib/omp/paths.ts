@@ -8,6 +8,12 @@ import * as path from "path";
  * are replicated here. Covered: PI_CODING_AGENT_DIR override, PI_CONFIG_DIR
  * rename, OMP_PROFILE/PI_PROFILE profiles, and the XDG data layout (used only
  * when $XDG_DATA_HOME/omp already exists, mirroring omp's opt-in migration).
+ *
+ * Every layout helper accepts an optional {@link PathScope}. Without one it
+ * reads the process environment, which is the historical behaviour. Passing an
+ * explicit scope lets one ompweb process resolve several profiles at once
+ * without mutating `process.env` — mutating it would leak a profile across
+ * concurrent requests (the split-brain the Electron GUI shipped with).
  */
 
 const APP_NAME = "omp";
@@ -17,6 +23,36 @@ const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 // Windows reserves these basenames and any `BASENAME.<ext>` form of them,
 // case-insensitively (NTFS treats CON and con alike).
 const WINDOWS_RESERVED_BASENAME_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$/i;
+
+/**
+ * Raw environment values for one resolution. Fields are kept verbatim (string
+ * or `undefined`), never pre-normalised, because the distinction between
+ * "unset" and "set but empty" is meaningful: an explicitly empty OMP_PROFILE
+ * selects the default profile instead of inheriting PI_PROFILE.
+ */
+export interface PathScope {
+  /** Raw OMP_PROFILE. `undefined` means unset → fall back to {@link piProfile}. */
+  ompProfile?: string;
+  /** Raw legacy PI_PROFILE. */
+  piProfile?: string;
+  /** Raw PI_CONFIG_DIR (defaults to `.omp`). */
+  configDirName?: string;
+  /** Raw PI_CODING_AGENT_DIR; ignored when a named profile is active. */
+  agentDirOverride?: string;
+  /** Raw XDG_DATA_HOME; only honored on linux/darwin. */
+  xdgDataHome?: string;
+}
+
+/** Snapshot of the current process environment as a resolution scope. */
+export function envScope(): PathScope {
+  return {
+    ompProfile: process.env.OMP_PROFILE,
+    piProfile: process.env.PI_PROFILE,
+    configDirName: process.env.PI_CONFIG_DIR,
+    agentDirOverride: process.env.PI_CODING_AGENT_DIR,
+    xdgDataHome: process.env.XDG_DATA_HOME,
+  };
+}
 
 /**
  * Faithful port of omp's normalizeProfileName (packages/utils/src/dirs.ts).
@@ -46,39 +82,37 @@ export function normalizeProfileName(profile: string | undefined): string | unde
 
 /** OMP_PROFILE is canonical; PI_PROFILE is the legacy fallback. An explicitly
  * empty OMP_PROFILE selects the default profile rather than inheriting. */
-export function getActiveProfile(): string | undefined {
-  if (process.env.OMP_PROFILE !== undefined) {
-    return normalizeProfileName(process.env.OMP_PROFILE);
-  }
-  return normalizeProfileName(process.env.PI_PROFILE);
+export function activeProfile(scope: PathScope = envScope()): string | undefined {
+  if (scope.ompProfile !== undefined) return normalizeProfileName(scope.ompProfile);
+  return normalizeProfileName(scope.piProfile);
 }
 
-export function getConfigDirName(): string {
-  return process.env.PI_CONFIG_DIR || CONFIG_DIR_NAME;
+export function getConfigDirName(scope: PathScope = envScope()): string {
+  return scope.configDirName || CONFIG_DIR_NAME;
 }
 
 /** Config root: ~/.omp, or ~/.omp/profiles/<name> for a named profile. */
-export function getConfigRoot(): string {
-  const base = path.join(homedir(), getConfigDirName());
-  const profile = getActiveProfile();
+export function getConfigRoot(scope: PathScope = envScope()): string {
+  const base = path.join(homedir(), getConfigDirName(scope));
+  const profile = activeProfile(scope);
   return profile ? path.join(base, "profiles", profile) : base;
 }
 
 /** The agent state directory (~/.omp/agent). PI_CODING_AGENT_DIR overrides it,
  * but a named profile takes precedence over the override (matching omp, where
  * profile activation rewrites PI_CODING_AGENT_DIR itself). */
-export function getAgentDir(): string {
-  const profile = getActiveProfile();
-  const override = process.env.PI_CODING_AGENT_DIR;
+export function getAgentDir(scope: PathScope = envScope()): string {
+  const profile = activeProfile(scope);
+  const override = scope.agentDirOverride;
   if (override && !profile) return path.resolve(override);
-  return path.join(getConfigRoot(), "agent");
+  return path.join(getConfigRoot(scope), "agent");
 }
 
-function isDefaultAgentDir(): boolean {
-  const profile = getActiveProfile();
-  const override = process.env.PI_CODING_AGENT_DIR;
+function isDefaultAgentDir(scope: PathScope = envScope()): boolean {
+  const profile = activeProfile(scope);
+  const override = scope.agentDirOverride;
   if (override && !profile) {
-    return path.resolve(override) === path.join(getConfigRoot(), "agent");
+    return path.resolve(override) === path.join(getConfigRoot(scope), "agent");
   }
   return true;
 }
@@ -87,14 +121,14 @@ function isDefaultAgentDir(): boolean {
  * $XDG_DATA_HOME/omp (or its profile subdir) already exists — omp treats the
  * XDG layout as opt-in via `omp config init-xdg`. XDG flattens the `agent/`
  * prefix: ~/.omp/agent/sessions → $XDG_DATA_HOME/omp/sessions. */
-function xdgDataAgentRoot(): string | undefined {
+function xdgDataAgentRoot(scope: PathScope = envScope()): string | undefined {
   if (process.platform !== "linux" && process.platform !== "darwin") return undefined;
-  if (!isDefaultAgentDir()) return undefined;
-  const value = process.env.XDG_DATA_HOME;
+  if (!isDefaultAgentDir(scope)) return undefined;
+  const value = scope.xdgDataHome;
   if (!value) return undefined;
   try {
     const appRoot = path.join(value, APP_NAME);
-    const profile = getActiveProfile();
+    const profile = activeProfile(scope);
     if (profile) {
       const profilePath = path.join(appRoot, "profiles", profile);
       return existsSync(profilePath) ? profilePath : undefined;
@@ -105,29 +139,29 @@ function xdgDataAgentRoot(): string | undefined {
   }
 }
 
-function agentDataSubdir(subdir: string): string {
-  const xdg = xdgDataAgentRoot();
-  return path.join(xdg ?? getAgentDir(), subdir);
+function agentDataSubdir(subdir: string, scope: PathScope = envScope()): string {
+  const xdg = xdgDataAgentRoot(scope);
+  return path.join(xdg ?? getAgentDir(scope), subdir);
 }
 
 /** ~/.omp/agent/sessions (or $XDG_DATA_HOME/omp/sessions). */
-export function getSessionsDir(): string {
-  return agentDataSubdir("sessions");
+export function getSessionsDir(scope: PathScope = envScope()): string {
+  return agentDataSubdir("sessions", scope);
 }
 
 /** OMP's gc archive root for compressed session JSONL files. */
-export function getArchivedSessionsDir(): string {
-  return path.join(path.dirname(getSessionsDir()), "archive", "sessions");
+export function getArchivedSessionsDir(scope: PathScope = envScope()): string {
+  return path.join(path.dirname(getSessionsDir(scope)), "archive", "sessions");
 }
 
 /** Content-addressed blob store referenced from session entries. */
-export function getBlobsDir(): string {
-  return agentDataSubdir("blobs");
+export function getBlobsDir(scope: PathScope = envScope()): string {
+  return agentDataSubdir("blobs", scope);
 }
 
 /** Settings file (YAML). config.yml is canonical, config.yaml the fallback. */
-export function getSettingsPath(): string {
-  const dir = getAgentDir();
+export function getSettingsPath(scope: PathScope = envScope()): string {
+  const dir = getAgentDir(scope);
   const canonical = path.join(dir, "config.yml");
   if (existsSync(canonical)) return canonical;
   const fallback = path.join(dir, "config.yaml");
@@ -136,8 +170,8 @@ export function getSettingsPath(): string {
 }
 
 /** Custom models file (YAML). models.yml canonical, models.yaml fallback. */
-export function getModelsConfigPath(): string {
-  const dir = getAgentDir();
+export function getModelsConfigPath(scope: PathScope = envScope()): string {
+  const dir = getAgentDir(scope);
   const canonical = path.join(dir, "models.yml");
   if (existsSync(canonical)) return canonical;
   const fallback = path.join(dir, "models.yaml");
@@ -146,8 +180,13 @@ export function getModelsConfigPath(): string {
 }
 
 /** User-level skills directory (~/.omp/agent/skills). */
-export function getUserSkillsDir(): string {
-  return path.join(getAgentDir(), "skills");
+export function getUserSkillsDir(scope: PathScope = envScope()): string {
+  return path.join(getAgentDir(scope), "skills");
+}
+
+/** User-level agents directory (~/.omp/agent/agents). */
+export function getUserAgentsDir(scope: PathScope = envScope()): string {
+  return path.join(getAgentDir(scope), "agents");
 }
 
 /** Best-effort canonicalization mirroring omp's resolveEquivalentPath: resolve
@@ -192,12 +231,8 @@ export function getSessionDirNameForCwd(cwd: string): string {
   return encodeLegacyAbsoluteSessionDirName(canonicalCwd);
 }
 
-/** User-level agents directory (~/.omp/agent/agents). */
-export function getUserAgentsDir(): string {
-  return path.join(getAgentDir(), "agents");
-}
-
-/** Project-level agents directory (./.omp/agents at git root, or cwd fallback). */
+/** Project-level agents directory (./.omp/agents at git root, or cwd fallback).
+ * Deliberately scope-free: it walks the project tree, not the omp profile. */
 export function getProjectAgentsDir(cwd: string): string {
   let current = path.resolve(cwd);
   const home = homedir();
