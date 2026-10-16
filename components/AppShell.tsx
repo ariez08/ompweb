@@ -870,6 +870,10 @@ export function AppShell() {
   const handleProfileChange = useCallback(() => {
     setSelectedSession(null);
     setNewSessionCwd(null);
+    // activeCwd feeds the FileExplorer and the composer's project context;
+    // leaving it pointed at the old profile's tree kept browsing a directory
+    // the new profile never registered.
+    setActiveCwd(null);
     setInitialSessionRestored(true);
     setSessionKey((k) => k + 1);
     setBranchTree([]);

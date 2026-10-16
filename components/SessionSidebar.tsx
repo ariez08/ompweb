@@ -996,7 +996,10 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
     setProfileBuckets(null);
     onProfileChange?.(profile);
     void loadSessions(true);
-  }, [loadSessions, onProfileChange]);
+    // The projects registry is per profile too; without this the Workspaces
+    // list kept showing the previous profile's projects until a manual reload.
+    void loadProjects();
+  }, [loadSessions, loadProjects, onProfileChange]);
 
   useEffect(() => {
     // Live running status and session-list invalidations arrive via SSE; the
