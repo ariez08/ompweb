@@ -6,6 +6,7 @@ import { RpcCommandError } from "@/lib/omp/rpc-process";
 import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import { MAX_AGENT_COMMAND_REQUEST_BYTES } from "@/lib/image-attachments";
 import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
+import { findCliSessionLock } from "@/lib/session-cli-lock";
 
 /** omp-web's own failures carry a stable code the client can localize; omp's
  * errors stay opaque English text. */
@@ -55,6 +56,20 @@ export async function POST(
         return NextResponse.json({ success: true, data: result }, { headers: { ...PROFILE_SCOPED_HEADERS } });
       }
       await existing.destroyAndWait();
+    }
+    // Guard against session split: if an external terminal/CLI process is currently
+    // holding this session, refuse to spawn a second child. Spawning would cause
+    // omp to fork to a new session file (open-elsewhere) and break conversation continuity.
+    const cliLock = await findCliSessionLock(id);
+    if (cliLock) {
+      return NextResponse.json(
+        {
+          error: `Sesi ini sedang aktif dibuka di terminal CLI (PID ${cliLock.pid}). Tutup sesi di terminal terlebih dahulu sebelum mengirim pesan dari web.`,
+          code: "session_locked_by_cli",
+          pid: cliLock.pid,
+        },
+        { status: 409, headers: { ...PROFILE_SCOPED_HEADERS } },
+      );
     }
 
     const resolved = await resolveSessionPathOr404(id, ctx);

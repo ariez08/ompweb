@@ -708,6 +708,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // global setting: each session remembers its own choice in localStorage.
   const [advisorEnabled, setAdvisorEnabled] = useState(false);
   const activeSubagentCount = subagents.filter((subagent) => subagent.source !== "history" && subagent.status === "started").length;
+  const [cliLockPid, setCliLockPid] = useState<number | null>(null);
 
   const eventSourceRef = useRef<EventSubscription | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1096,6 +1097,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           externalPollRef.current = null;
         }
         externalRunningRef.current = false;
+        setCliLockPid(null);
       }
       const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
       const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}?${params}`);
@@ -1152,7 +1154,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const token = beginAuthoritativeModelSync();
         const stateRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
         if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
-        const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse; external?: boolean };
+        const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse; external?: boolean; cliLocked?: boolean; cliLockPid?: number };
         if (sessionIdRef.current !== sid) {
           if (showLoading) setLoading(false);
           return null;
@@ -1170,6 +1172,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (modelApplied && liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
           if (liveState.fastModeEnabled !== undefined) setFastModeEnabled(liveState.fastModeEnabled);
           setFastModeActive(liveState.fastModeActive);
+          if (agentState.cliLocked && typeof agentState.cliLockPid === "number") setCliLockPid(agentState.cliLockPid);
+          else if (agentState.cliLocked === false) setCliLockPid(null);
           if (liveState.autoRetryEnabled !== undefined) setAutoRetryEnabled(liveState.autoRetryEnabled);
           if (liveState.interruptMode !== undefined) setInterruptMode(liveState.interruptMode);
           if (liveState.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(liveState.autoCompactionEnabled);
@@ -1671,9 +1675,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // writer. Returns true when the action was rejected.
   const rejectIfExternallyRunning = useCallback((): boolean => {
     if (!externalRunningRef.current) return false;
-    addNotice({ type: "info", message: translate("agentSession.externallyRunning") });
+    const msg = cliLockPid
+      ? translate("agentSession.lockedByCliNotice", { pid: String(cliLockPid) })
+      : translate("agentSession.externallyRunning");
+    addNotice({ type: "warning", message: msg });
     return true;
-  }, [addNotice]);
+  }, [addNotice, cliLockPid]);
 
   // Declared after addNotice: the dependency array below is evaluated during
   // render, so addNotice must already be initialized.
@@ -2511,7 +2518,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!trimmedMessage && !images?.length) return false;
     if (agentRunningRef.current || bashRunningRef.current) {
       if (externalRunningRef.current) {
-        addNotice({ type: "info", message: translate("agentSession.externallyRunning") });
+        const msg = cliLockPid
+          ? translate("agentSession.lockedByCliNotice", { pid: String(cliLockPid) })
+          : translate("agentSession.externallyRunning");
+        addNotice({ type: "warning", message: msg });
       }
       return false;
     }
@@ -3314,24 +3324,33 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             setAgentRunning(true);
             setAgentPhase({ kind: "running_command" });
             dispatch({ type: "start" });
-            addNotice({ type: "info", message: translate("agentSession.externallyRunning") });
+            if (agentState.cliLocked && agentState.cliLockPid) {
+              setCliLockPid(agentState.cliLockPid);
+              addNotice({ type: "warning", message: translate("agentSession.lockedByCliNotice", { pid: String(agentState.cliLockPid) }) });
+            } else {
+              setCliLockPid(null);
+              addNotice({ type: "info", message: translate("agentSession.externallyRunning") });
+            }
             // When the external CLI finishes, the file stops changing and the
             // state route reports external:false again — reclaim the session
             // for web sending and clear the running state.
             if (externalPollRef.current) clearInterval(externalPollRef.current);
             externalPollRef.current = setInterval(() => {
               void fetch(`/api/sessions/${encodeURIComponent(session.id)}/state`)
-                .then((res) => (res.ok ? res.json() as Promise<{ external?: boolean }> : null))
+                .then((res) => (res.ok ? res.json() as Promise<{ external?: boolean; cliLocked?: boolean; cliLockPid?: number }> : null))
                 .then((st) => {
+                  if (st?.cliLocked && typeof st.cliLockPid === "number") {
+                    setCliLockPid(st.cliLockPid);
+                  }
                   if (!st || st.external !== false) return;
                   if (externalPollRef.current) {
                     clearInterval(externalPollRef.current);
                     externalPollRef.current = null;
                   }
                   if (sessionIdRef.current !== session.id) return;
+                  setCliLockPid(null);
                   externalRunningRef.current = false;
                   agentRunningRef.current = false;
-                  setAgentRunning(false);
                   dispatch({ type: "end" });
                   addNotice({ type: "info", message: translate("agentSession.externalFinished") });
                 })
@@ -3547,7 +3566,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   return {
     // State
-    data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState,
+    data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState, cliLockPid,
     agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,

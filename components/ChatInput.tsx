@@ -45,6 +45,7 @@ interface Props {
   onFollowUp?: (message: string, images?: AttachedImage[]) => void;
   onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => void;
   isStreaming: boolean;
+  cliLockPid?: number | null;
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
   modelNames?: Record<string, string>;
@@ -378,7 +379,7 @@ function ComposerModeStatus({ goal, plan, onOpenPlan }: { goal?: ActiveGoal | nu
 }
 
 export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, fastModeSupported, onFastModeChange,
+  onSend, onAbort, onSteer, onFollowUp, isStreaming, cliLockPid, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, fastModeSupported, onFastModeChange,
   onAbortCompaction, isCompacting, compactResult,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap, modelNameOverride,
   retryInfo, queuedMessages, inputHistory = [], onAbortRetry,
@@ -2200,7 +2201,14 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             }}
             onInput={handleInput}
             onPaste={handlePaste}
-            placeholder={t("chatInput.placeholder")}
+            placeholder={
+              cliLockPid
+                ? t("chatInput.placeholderCliLocked", { pid: String(cliLockPid) })
+                : isStreaming
+                ? t("chatInput.placeholderRunning")
+                : t("chatInput.placeholder")
+            }
+            disabled={Boolean(cliLockPid)}
             rows={1}
             style={{
               width: "100%",
@@ -2215,6 +2223,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               minHeight: 24,
               maxHeight: 200,
               overflow: "auto",
+              cursor: cliLockPid ? "not-allowed" : undefined,
+              opacity: cliLockPid ? 0.7 : 1,
             }}
           />
 
@@ -2629,7 +2639,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={(!value.trim() && !attachedImages.length) || isSubmitting}
+                disabled={Boolean(cliLockPid) || (!value.trim() && !attachedImages.length) || isSubmitting}
+                title={cliLockPid ? t("agentSession.lockedByCliNotice", { pid: String(cliLockPid) }) : undefined}
                 style={{
                   display: "flex", alignItems: "center", gap: 6,
                   height: 28,

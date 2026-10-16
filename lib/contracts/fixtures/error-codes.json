@@ -101,6 +101,7 @@
     "session_file_too_large",
     "session_has_children",
     "session_import_request_too_large",
+    "session_locked_by_cli",
     "session_name_required",
     "session_no_messages_to_name",
     "skill_install_failed",

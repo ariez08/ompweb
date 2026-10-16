@@ -1,5 +1,6 @@
 import { getRunningRpcSessionIdsFor, subscribeRunningSessions } from "@/lib/rpc-manager";
 import { subscribeSessionFileChanges, getExternallyActiveIds } from "@/lib/session-watcher";
+import { listCliLockedSessions } from "@/lib/session-cli-lock";
 import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
@@ -56,12 +57,13 @@ export async function GET(req: Request) {
       const unsubscribeFiles = holder.fn;
 
       // Periodically re-broadcast the externally-running set so badges expire
-      // client-side once a CLI session stops writing (no event fires then).
-      const externalHeartbeat = setInterval(() => {
+      // client-side once a CLI session stops writing or exits.
+      const externalHeartbeat = setInterval(async () => {
         try {
-          // Exclude the web's own RPC sessions: their file writes are ours.
           const rpcIds = new Set(getRunningRpcSessionIdsFor(ctx));
-          const active = getExternallyActiveIds(5000, ctx).filter((id) => !rpcIds.has(id));
+          const fileActive = getExternallyActiveIds(5000, ctx);
+          const cliLocks = await listCliLockedSessions();
+          const active = [...new Set([...fileActive, ...cliLocks.keys()])].filter((id) => !rpcIds.has(id));
           if (active.length > 0) {
             encode({ type: "externally-running", externallyRunning: active });
           }
@@ -71,8 +73,16 @@ export async function GET(req: Request) {
       }, 5_000);
 
       // Initial snapshot so the client renders the correct state immediately.
-      // (A duplicate frame here is harmless: the client just sets the same set.)
-      encode({ type: "running", runningSessionIds: getRunningRpcSessionIdsFor(ctx) });
+      const initialRpc = getRunningRpcSessionIdsFor(ctx);
+      encode({ type: "running", runningSessionIds: initialRpc });
+      void listCliLockedSessions().then((cliLocks) => {
+        const fileActive = getExternallyActiveIds(5000, ctx);
+        const rpcIds = new Set(initialRpc);
+        const active = [...new Set([...fileActive, ...cliLocks.keys()])].filter((id) => !rpcIds.has(id));
+        if (active.length > 0) {
+          encode({ type: "externally-running", externallyRunning: active });
+        }
+      }).catch(() => {});
       // Heartbeat to keep the connection alive through proxies/timeouts.
       const heartbeat = setInterval(() => {
         try {
