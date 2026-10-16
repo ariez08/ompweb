@@ -8,18 +8,19 @@ import { WebRpcError, startRpcSession } from "@/lib/rpc-manager";
 import { RpcCommandError } from "@/lib/omp/rpc-process";
 import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import { MAX_AGENT_COMMAND_REQUEST_BYTES } from "@/lib/image-attachments";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 function newSessionErrorResponse(error: unknown) {
   if (error instanceof RequestBodyTooLargeError) {
-    return NextResponse.json({ error: "New session request is too large", code: "request_too_large" }, { status: 413 });
+    return NextResponse.json({ error: "New session request is too large", code: "request_too_large" }, { status: 413, headers: { ...PROFILE_SCOPED_HEADERS } });
   }
   if (error instanceof SyntaxError) {
-    return NextResponse.json({ error: "Invalid JSON request body", code: "invalid_json" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid JSON request body", code: "invalid_json" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
   }
   if (error instanceof WebRpcError || error instanceof RpcCommandError) {
     return NextResponse.json(
       { error: error.message, code: error instanceof WebRpcError ? error.code : (error.code ?? "rpc_command_failed") },
-      { status: 400 },
+      { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } },
     );
   }
   return apiErrorResponse(error);
@@ -32,16 +33,17 @@ function newSessionErrorResponse(error: unknown) {
 // set_thinking_level (not CLI flags) so failures surface as command errors and
 // the live model catalog (incl. background discovery) is consulted.
 export async function POST(req: Request) {
+  const ctx = requestProfileContext(req);
   let spawnedSession: Awaited<ReturnType<typeof startRpcSession>>["session"] | undefined;
   try {
     const body = await parseJsonWithinLimit<{ cwd?: string; [key: string]: unknown }>(req, MAX_AGENT_COMMAND_REQUEST_BYTES);
     const { cwd, ...command } = body;
 
     if (!cwd || typeof cwd !== "string") {
-      return NextResponse.json({ error: "cwd is required", code: "cwd_required" }, { status: 400 });
+      return NextResponse.json({ error: "cwd is required", code: "cwd_required" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
     if (!existsSync(cwd)) {
-      return NextResponse.json({ error: `Directory does not exist: ${cwd}`, code: "directory_not_found" }, { status: 400 });
+      return NextResponse.json({ error: `Directory does not exist: ${cwd}`, code: "directory_not_found" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
 
     // Use a one-time key so startRpcSession's lock doesn't conflict with real session ids
@@ -51,14 +53,14 @@ export async function POST(req: Request) {
     // session after a reconnect.
     delete promptCommand.sessionId;
     if (typeof promptCommand.type !== "string" || !promptCommand.type.trim()) {
-      return NextResponse.json({ error: "command type is required", code: "command_type_required" }, { status: 400 });
+      return NextResponse.json({ error: "command type is required", code: "command_type_required" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
 
     // Must be unique per request: startRpcSession coalesces concurrent callers
     // that share a key onto one session. Date.now() (ms resolution) collides for
     // requests in the same millisecond, merging two new sessions into one.
     const tempKey = `__new__${randomUUID()}`;
-    const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames, advisor === true);
+    const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames, advisor === true, undefined, ctx);
     spawnedSession = session;
 
     // Keep the files-route allowed-roots cache (see app/api/files/[...path]/route.ts)
@@ -78,12 +80,12 @@ export async function POST(req: Request) {
     }
 
     if (promptCommand.type === "ensure_session") {
-      return NextResponse.json({ success: true, sessionId: realSessionId, data: null });
+      return NextResponse.json({ success: true, sessionId: realSessionId, data: null }, { headers: { ...PROFILE_SCOPED_HEADERS } });
     }
 
     const result = await session.send(promptCommand);
 
-    return NextResponse.json({ success: true, sessionId: realSessionId, data: result });
+    return NextResponse.json({ success: true, sessionId: realSessionId, data: result }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     // Setup runs after spawn (model/thinking/first prompt) can fail. Leaving
     // that brand-new child alive creates an orphan with no owner and can keep

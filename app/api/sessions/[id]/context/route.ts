@@ -2,11 +2,13 @@ import { NextResponse } from "next/server";
 import { loadSessionFile } from "@/lib/omp/session-files";
 import { buildSessionContext } from "@/lib/session-reader";
 import { apiErrorResponse, resolveSessionPathOr404 } from "@/lib/api-utils";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const ctx = requestProfileContext(req);
   const { id } = await params;
   const url = new URL(req.url);
   const leafId = url.searchParams.get("leafId") ?? undefined;
@@ -16,7 +18,7 @@ export async function GET(
   const includePreCompaction = url.searchParams.has("includePreCompaction");
 
   try {
-    const resolved = await resolveSessionPathOr404(id);
+    const resolved = await resolveSessionPathOr404(id, ctx);
     if ("response" in resolved) return resolved.response;
     const filePath = resolved.filePath;
 
@@ -27,11 +29,11 @@ export async function GET(
     if (loadError === "too_large") {
       return NextResponse.json(
         { error: "Session file is too large to open in omp-web", code: "session_file_too_large" },
-        { status: 413 },
+        { status: 413, headers: { ...PROFILE_SCOPED_HEADERS } },
       );
     }
     if (!header) {
-      return NextResponse.json({ error: "Session file is missing or malformed", code: "session_file_malformed" }, { status: 404 });
+      return NextResponse.json({ error: "Session file is missing or malformed", code: "session_file_malformed" }, { status: 404, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
     const context = buildSessionContext(entries, leafId, {
       deferThinking,
@@ -39,7 +41,7 @@ export async function GET(
       includePreCompaction,
     });
 
-    return NextResponse.json({ context });
+    return NextResponse.json({ context }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return apiErrorResponse(error);
   }

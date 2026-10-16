@@ -1,5 +1,6 @@
-import { getRunningRpcSessionIds, subscribeRunningSessions } from "@/lib/rpc-manager";
+import { getRunningRpcSessionIdsFor, subscribeRunningSessions } from "@/lib/rpc-manager";
 import { subscribeSessionFileChanges, getExternallyActiveIds } from "@/lib/session-watcher";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 
@@ -7,6 +8,7 @@ export const dynamic = "force-dynamic";
 // session ids. Also carries refresh hints when a live session's file metadata
 // changes, so the sidebar can show a newly-started session immediately.
 export async function GET(req: Request) {
+  const ctx = requestProfileContext(req);
   // Hoisted so the stream's cancel() (half-open disconnects that never fire
   // the abort signal) can release the heartbeat and the subscriber.
   let streamCleanup: (() => void) | null = null;
@@ -29,7 +31,7 @@ export async function GET(req: Request) {
         } catch {
           // controller already closed
         }
-      });
+      }, ctx.key);
 
       // Sessions omp writes outside the web UI produce no RPC events, so the
       // only signal that they advanced is the file itself.
@@ -39,7 +41,7 @@ export async function GET(req: Request) {
           // Sessions the web UI spawned itself produce their own RPC events;
           // everything else that changed on disk is being written by an
           // external omp/harness and should render as externally running.
-          const rpcIds = new Set(getRunningRpcSessionIds());
+          const rpcIds = new Set(getRunningRpcSessionIdsFor(ctx));
           const externallyRunning = sessionIds.filter((id) => !rpcIds.has(id));
           encode({
             type: "sessions-changed",
@@ -50,7 +52,7 @@ export async function GET(req: Request) {
         } catch {
           try { holder.fn?.(); } catch { /* already cleaned up */ }
         }
-      });
+      }, ctx);
       const unsubscribeFiles = holder.fn;
 
       // Periodically re-broadcast the externally-running set so badges expire
@@ -58,8 +60,8 @@ export async function GET(req: Request) {
       const externalHeartbeat = setInterval(() => {
         try {
           // Exclude the web's own RPC sessions: their file writes are ours.
-          const rpcIds = new Set(getRunningRpcSessionIds());
-          const active = getExternallyActiveIds(5000).filter((id) => !rpcIds.has(id));
+          const rpcIds = new Set(getRunningRpcSessionIdsFor(ctx));
+          const active = getExternallyActiveIds(5000, ctx).filter((id) => !rpcIds.has(id));
           if (active.length > 0) {
             encode({ type: "externally-running", externallyRunning: active });
           }
@@ -70,8 +72,7 @@ export async function GET(req: Request) {
 
       // Initial snapshot so the client renders the correct state immediately.
       // (A duplicate frame here is harmless: the client just sets the same set.)
-      encode({ type: "running", runningSessionIds: getRunningRpcSessionIds() });
-
+      encode({ type: "running", runningSessionIds: getRunningRpcSessionIdsFor(ctx) });
       // Heartbeat to keep the connection alive through proxies/timeouts.
       const heartbeat = setInterval(() => {
         try {
@@ -104,7 +105,7 @@ export async function GET(req: Request) {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      ...PROFILE_SCOPED_HEADERS,
       Connection: "keep-alive",
     },
   });

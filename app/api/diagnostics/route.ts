@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import { hostClient } from "@/lib/omp/host-client";
-import { getConfigRoot, getAgentDir, getSessionsDir, getSettingsPath, getModelsConfigPath } from "@/lib/omp/paths";
+import { defaultProfileContext } from "@/lib/omp/profile-context";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 import YAML from "yaml";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,12 @@ export const dynamic = "force-dynamic";
  * GET /api/diagnostics — backend service health for the settings panel:
  * omp runtime, network proxy, RPC sessions, server identity.
  */
-export async function GET() {
+export async function GET(request: Request) {
+  // Diagnostics is the operator's debugging surface: report the REQUEST
+  // profile's paths (what the UI is actually using) plus the process profile,
+  // so a mismatch between the two is visible instead of inferred.
+  const ctx = requestProfileContext(request);
+  const processCtx = defaultProfileContext();
   const ompBin = resolveOmpBin();
   const ompVersion = await getOmpVersion();
   const proxyConfig = readProxyConfig();
@@ -31,7 +37,7 @@ export async function GET() {
   // RPC 健康信号：最近 60s 内的 omp 子进程异常退出 / 会话分裂——这些直接
   // 导致"消息发不出去"，必须纳入健康判断（仅看 omp 是否安装是不够的）。
   const recentFailures = recentRpcFailures(60_000);
-  const orphanRustHostPids = hostClient.host.orphans();
+  const orphanRustHostPids = hostClient.host.orphans(ctx);
 
   // 其他 ompweb 实例探测：旧实例（残留的开发服务/旧 app）会持有会话锁、
   // 扰乱 --resume，是"服务异常但健康显示正常"的主要来源。扫描本机常见端口。
@@ -98,14 +104,27 @@ export async function GET() {
       cpus: os.cpus()?.length ?? 1,
       hostname: os.hostname(),
     },
+    profile: {
+      request: ctx.profile,
+      process: processCtx.profile,
+      // True when the cookie selects a profile other than the one ompweb was
+      // launched with — the split-brain signature the old Electron GUI shipped.
+      mismatch: ctx.key !== processCtx.key,
+    },
     paths: {
       ompBin: ompBin ?? null,
       rustHostBin: hostClient.host.status().path || null,
-      configRoot: getConfigRoot(),
-      agentDir: getAgentDir(),
-      sessionsDir: getSessionsDir(),
-      settingsPath: getSettingsPath(),
-      modelsPath: getModelsConfigPath(),
+      configRoot: ctx.configRoot,
+      agentDir: ctx.agentDir,
+      sessionsDir: ctx.sessionsDir,
+      settingsPath: ctx.settingsPath,
+      modelsPath: ctx.modelsConfigPath,
+      runtimeDbPath: ctx.runtimeDbPath,
+    },
+    processPaths: {
+      configRoot: processCtx.configRoot,
+      agentDir: processCtx.agentDir,
+      sessionsDir: processCtx.sessionsDir,
     },
     // Backend Ownership dashboard (doc 15 / v4 P40): per-domain authority so
     // development/testing can see at a glance what has migrated to Rust.
@@ -114,7 +133,7 @@ export async function GET() {
     // location mode + availability. Absent = Runtime unavailable (agent
     // commands fail closed; no silent Node fallback).
     rustHost: hostClient.host.status(),
-  });
+  }, { headers: { ...PROFILE_SCOPED_HEADERS } });
 }
 
 /** POST /api/diagnostics  { action: "clear" } — explicit dismissal of the

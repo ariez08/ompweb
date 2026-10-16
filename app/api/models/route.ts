@@ -1,22 +1,24 @@
 import { statSync } from "fs";
 import { invalidateModelsCache, loadModelsWithCache, withModelRuntimeError, withSafeModelLoadFailure, type ModelsData } from "@/lib/models-cache";
 import { disposeUtilityRpc, runUtilityCommand, type OmpModel } from "@/lib/omp/rpc-utility";
-import { getModelsConfigPath } from "@/lib/omp/paths";
 import { readDisabledProviders } from "@/lib/omp/model-roles";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
+import type { ProfileContext } from "@/lib/omp/profile-context";
 
 export const dynamic = "force-dynamic";
-
 // The omp model registry (auth + models.yml) is global, not per-cwd, so one
-// cache entry serves every request. The ?cwd= query parameter is still
-// accepted for client compatibility but no longer affects the result.
-const MODELS_CACHE_KEY = "global";
+// cache entry per profile serves every request. The ?cwd= query parameter is
+// still accepted for client compatibility but no longer affects the result.
+// The entry is profile-keyed: two profiles sharing one process must never
+// read each other's cached registry.
+const MODELS_CACHE_SUFFIX = "global";
 
 declare global {
-  var __ompModelsConfigFingerprint: string | undefined;
+  var __ompModelsConfigFingerprints: Map<string, string> | undefined;
 }
 
-function refreshModelsIfConfigChanged(): void {
-  const path = getModelsConfigPath();
+function refreshModelsIfConfigChanged(ctx: ProfileContext): void {
+  const path = ctx.modelsConfigPath;
   let fingerprint = `${path}:missing`;
   try {
     const stat = statSync(path);
@@ -26,13 +28,17 @@ function refreshModelsIfConfigChanged(): void {
     // its later creation.
   }
 
-  const previous = globalThis.__ompModelsConfigFingerprint;
-  globalThis.__ompModelsConfigFingerprint = fingerprint;
+  // Per-profile fingerprints: a single shared slot would report a false
+  // "config changed" every time two profiles alternate requests.
+  if (!globalThis.__ompModelsConfigFingerprints) globalThis.__ompModelsConfigFingerprints = new Map();
+  const fingerprints = globalThis.__ompModelsConfigFingerprints;
+  const previous = fingerprints.get(ctx.key);
+  fingerprints.set(ctx.key, fingerprint);
   if (previous !== undefined && previous !== fingerprint) {
     // The utility process reads models.yml once at startup. External edits
     // therefore need the same invalidation as the web editor's PUT route.
     invalidateModelsCache();
-    disposeUtilityRpc();
+    disposeUtilityRpc(ctx);
   }
 }
 
@@ -60,10 +66,11 @@ function supportsFastMode(model: OmpModel): boolean {
   return model.provider === "anthropic" || model.provider === "openai" || model.provider === "google";
 }
 
-async function loadModels(): Promise<ModelsData> {
+async function loadModels(ctx: ProfileContext): Promise<ModelsData> {
   const availableResponse = await runUtilityCommand<{ models?: unknown }>(
     { type: "get_available_models" },
     120_000,
+    ctx,
   );
   const available = Array.isArray(availableResponse.models)
     ? availableResponse.models
@@ -86,6 +93,7 @@ async function loadModels(): Promise<ModelsData> {
   const loginResponse = await runUtilityCommand<{ providers?: unknown }>(
     { type: "get_login_providers" },
     30_000,
+    ctx,
   );
   const loginProviders = Array.isArray(loginResponse.providers)
     ? loginResponse.providers.filter((provider): provider is { id: string; name: string; authenticated: boolean } => (
@@ -95,7 +103,7 @@ async function loadModels(): Promise<ModelsData> {
       && typeof (provider as { authenticated?: unknown }).authenticated === "boolean"
     ))
     : [];
-  const disabledProviders = readDisabledProviders();
+  const disabledProviders = readDisabledProviders(ctx);
   const connectedProviders = loginProviders
     .filter((provider) => provider.authenticated)
     .map((provider) => ({ id: provider.id, name: provider.name, disabled: disabledProviders.has(provider.id) }));
@@ -112,6 +120,7 @@ async function loadModels(): Promise<ModelsData> {
     const state = await runUtilityCommand<{ model?: { provider?: string; id?: string } }>(
       { type: "get_state" },
       30_000,
+      ctx,
     );
     const provider = state.model?.provider;
     const modelId = state.model?.id;
@@ -135,11 +144,12 @@ const EMPTY_MODELS: ModelsData = {
   thinkingLevels: {},
 };
 
-export async function GET() {
-  refreshModelsIfConfigChanged();
+export async function GET(request: Request) {
+  const ctx = requestProfileContext(request);
+  refreshModelsIfConfigChanged(ctx);
   try {
-    return Response.json(await loadModelsWithCache(MODELS_CACHE_KEY, () => loadModels()));
+    return Response.json(await loadModelsWithCache(`${ctx.key}:${MODELS_CACHE_SUFFIX}`, () => loadModels(ctx)), { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch {
-    return Response.json(withSafeModelLoadFailure(EMPTY_MODELS));
+    return Response.json(withSafeModelLoadFailure(EMPTY_MODELS), { headers: { ...PROFILE_SCOPED_HEADERS } });
   }
 }

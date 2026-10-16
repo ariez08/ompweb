@@ -5,13 +5,14 @@ import { readSessionHeader, resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, resolveSpawnCwdResult, startRpcSession } from "@/lib/rpc-manager";
 import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import { redactMcpServer } from "@/lib/omp/mcp-config";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 const MAX_MCP_REQUEST_BYTES = 1024 * 1024;
 
 function mcpErrorResponse(error: unknown) {
   const status = error instanceof RequestBodyTooLargeError ? 413 : 400;
-  return NextResponse.json({ error: error instanceof RequestBodyTooLargeError ? "MCP request is too large" : error instanceof Error ? error.message : String(error) }, { status });
+  return NextResponse.json({ error: error instanceof RequestBodyTooLargeError ? "MCP request is too large" : error instanceof Error ? error.message : String(error) }, { status, headers: { ...PROFILE_SCOPED_HEADERS } });
 }
 
 function mergeMcpServers(primary: McpLiveServer[], secondary: McpLiveServer[]): McpLiveServer[] {
@@ -32,13 +33,14 @@ async function allowedCwd(cwd: unknown): Promise<string> {
 }
 
 export async function GET(request: Request) {
+  const ctx = requestProfileContext(request);
   try {
     const params = new URL(request.url).searchParams;
     const requestedCwd = params.get("cwd");
     const cwd = requestedCwd ? await allowedCwd(requestedCwd) : null;
     const file = cwd ? readMcpConfig(cwd) : null;
-    const user = readUserMcpConfig();
-    const builtinPresets = getBuiltinMcpPresets(cwd ?? undefined);
+    const user = readUserMcpConfig(ctx);
+    const builtinPresets = getBuiltinMcpPresets(cwd ?? undefined, ctx);
     const inventory: McpLiveServer[] = [
       ...user.servers.map(({ name, config }) => ({ name, source: "User level", status: config.enabled === false ? "disabled" as const : "configured" as const, type: typeof config.type === "string" ? config.type : typeof config.url === "string" ? "http" : "stdio" })),
       ...user.disabledServers.map((name) => ({ name, source: "Disabled", status: "disabled" as const })),
@@ -74,15 +76,15 @@ export async function GET(request: Request) {
     let liveError: string | undefined;
     if (sessionId) {
       try {
-        let session = getRpcSession(sessionId);
+        let session = getRpcSession(sessionId, ctx);
         if (!session?.isAlive()) {
-          const sessionFile = await resolveSessionPath(sessionId);
+          const sessionFile = await resolveSessionPath(sessionId, ctx);
           if (!sessionFile) throw new Error("Session not found");
           const header = readSessionHeader(sessionFile);
           const { cwd } = resolveSpawnCwdResult(header?.cwd);
           // No advisor opinion: this spawn is a side effect of listing MCP
           // servers and must not replace a child spawned with --advisor.
-          ({ session } = await startRpcSession(sessionId, sessionFile, cwd, undefined, undefined, header?.cwd));
+          ({ session } = await startRpcSession(sessionId, sessionFile, cwd, undefined, undefined, header?.cwd, ctx));
         }
         liveServers = mergeMcpServers(parseMcpListOutput(await session.getMcpList()), inventory);
       } catch (error) {
@@ -99,22 +101,23 @@ export async function GET(request: Request) {
       builtinPresets,
       liveServers,
       liveError,
-    });
+    }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return mcpErrorResponse(error);
   }
 }
 
 export async function POST(request: Request) {
+  const ctx = requestProfileContext(request);
   try {
     const body = await parseJsonWithinLimit<{ cwd?: unknown; scope?: unknown; name?: unknown; previousName?: unknown; server?: unknown }>(request, MAX_MCP_REQUEST_BYTES);
     validateMcpServer(body.name, body.server);
     if (body.previousName !== undefined && typeof body.previousName !== "string") throw new Error("previousName must be a string");
     if (body.scope === "user" || !body.cwd) {
-      return NextResponse.json({ success: true, ...writeUserMcpServer(body.name as string, body.server, body.previousName) });
+      return NextResponse.json({ success: true, ...writeUserMcpServer(body.name as string, body.server, body.previousName, ctx) }, { headers: { ...PROFILE_SCOPED_HEADERS } });
     }
     const cwd = await allowedCwd(body.cwd);
-    return NextResponse.json({ success: true, ...writeMcpServer(cwd, body.name as string, body.server, body.previousName) });
+    return NextResponse.json({ success: true, ...writeMcpServer(cwd, body.name as string, body.server, body.previousName) }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return mcpErrorResponse(error);
   }
@@ -124,7 +127,7 @@ export async function PUT(request: Request) {
   try {
     const body = await parseJsonWithinLimit<{ name?: unknown; server?: unknown }>(request, MAX_MCP_REQUEST_BYTES);
     validateMcpServer(body.name, body.server);
-    return NextResponse.json({ success: true, message: "MCP server configuration is valid" });
+    return NextResponse.json({ success: true, message: "MCP server configuration is valid" }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return mcpErrorResponse(error);
   }
@@ -135,7 +138,7 @@ export async function DELETE(request: Request) {
     const body = await parseJsonWithinLimit<{ cwd?: unknown; name?: unknown }>(request, MAX_MCP_REQUEST_BYTES);
     const cwd = await allowedCwd(body.cwd);
     if (typeof body.name !== "string") throw new Error("name is required");
-    return NextResponse.json({ success: true, ...deleteMcpServer(cwd, body.name) });
+    return NextResponse.json({ success: true, ...deleteMcpServer(cwd, body.name) }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return mcpErrorResponse(error);
   }

@@ -3,7 +3,7 @@ import { spawn } from "child_process";
 import { statSync } from "fs";
 import { getAllowedFileRoots, isExistingFilePathAllowed, normalizeSlashes } from "@/lib/file-access";
 import { buildRevealSpawn } from "@/lib/reveal-command";
-import { getConfigRoot, getAgentDir, getSessionsDir } from "@/lib/omp/paths";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 import { resolveOmpBin } from "@/lib/omp/omp-cli";
 import { hostClient } from "@/lib/omp/host-client";
 import path from "path";
@@ -21,17 +21,21 @@ export const dynamic = "force-dynamic";
  * never interpolated into a shell string.
  */
 export async function POST(req: Request) {
+  const ctx = requestProfileContext(req);
   try {
     const body = await req.json().catch(() => ({}));
     const target = typeof body?.path === "string" ? body.path : "";
     if (!target) {
-      return NextResponse.json({ error: "Missing path", code: "missing_path" }, { status: 400 });
+      return NextResponse.json({ error: "Missing path", code: "missing_path" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
     const allowedRoots = await getAllowedFileRoots();
     try {
-      allowedRoots.add(normalizeSlashes(getConfigRoot()));
-      allowedRoots.add(normalizeSlashes(getAgentDir()));
-      allowedRoots.add(normalizeSlashes(getSessionsDir()));
+      // The allowlist follows the REQUEST profile, never the process default:
+      // otherwise a profile-scoped reveal could be pointed at another profile's
+      // agent dir (or vice versa) purely by cookie drift.
+      allowedRoots.add(normalizeSlashes(ctx.configRoot));
+      allowedRoots.add(normalizeSlashes(ctx.agentDir));
+      allowedRoots.add(normalizeSlashes(ctx.sessionsDir));
     } catch {
       // ignore path resolution failure in restricted environments
     }
@@ -44,13 +48,13 @@ export async function POST(req: Request) {
       (rustHost?.path && normalizedTarget === path.resolve(rustHost.path));
 
     if (!isSpecialAllowed && !isExistingFilePathAllowed(target, allowedRoots)) {
-      return NextResponse.json({ error: "Path not allowed", code: "path_not_allowed" }, { status: 403 });
+      return NextResponse.json({ error: "Path not allowed", code: "path_not_allowed" }, { status: 403, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
     let stat;
     try {
       stat = statSync(target);
     } catch {
-      return NextResponse.json({ error: "Path does not exist", code: "path_not_found" }, { status: 404 });
+      return NextResponse.json({ error: "Path does not exist", code: "path_not_found" }, { status: 404, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
 
     let launcher: { command: string; args: string[] };
@@ -59,7 +63,7 @@ export async function POST(req: Request) {
     } catch {
       return NextResponse.json(
         { error: `Reveal unsupported on ${process.platform}`, code: "unsupported_platform" },
-        { status: 501 },
+        { status: 501, headers: { ...PROFILE_SCOPED_HEADERS } },
       );
     }
 

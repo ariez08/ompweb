@@ -1,4 +1,5 @@
 import { getRpcSession } from "@/lib/rpc-manager";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 
@@ -7,14 +8,15 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const ctx = requestProfileContext(req);
   const { id } = await params;
 
   // SSE is observer-only: listing or opening a saved session must not create
   // another omp process for a terminal-owned session. Explicit commands use
   // POST /api/agent/[id], which starts the wrapper before this route attaches.
-  const existing = getRpcSession(id);
+  const existing = getRpcSession(id, ctx);
   const session = existing?.isAlive() ? existing : undefined;
-  if (!session) return new Response("Session is not managed by omp-web", { status: 409 });
+  if (!session) return new Response("Session is not managed by omp-web", { status: 409, headers: { ...PROFILE_SCOPED_HEADERS } });
 
   const encoder = new TextEncoder();
   // Hoisted so the stream's cancel() (half-open disconnects that never fire
@@ -109,7 +111,7 @@ export async function GET(
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      ...PROFILE_SCOPED_HEADERS,
       Connection: "keep-alive",
     },
   });

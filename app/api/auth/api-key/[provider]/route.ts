@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/api-utils";
 import { type OmpLoginProvider, type OmpModel, runUtilityCommand } from "@/lib/omp/rpc-utility";
+import { requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 
@@ -17,16 +18,19 @@ const API_KEY_WRITE_GUIDANCE =
   "custom provider in ~/.omp/agent/models.yml.";
 
 // GET /api/auth/api-key/[provider] — returns auth status (never returns the actual key)
-export async function GET(_req: Request, { params }: Params) {
+export async function GET(req: Request, { params }: Params) {
+  const ctx = requestProfileContext(req);
   const { provider } = await params;
   try {
     const { models } = await runUtilityCommand<{ models: OmpModel[] }>(
       { type: "get_available_models" },
       120_000,
+      ctx,
     );
     const { providers: loginProviders } = await runUtilityCommand<{ providers: OmpLoginProvider[] }>(
       { type: "get_login_providers" },
       30_000,
+      ctx,
     );
     const loginProvider = loginProviders.find((p) => p.id === provider);
     const modelCount = models.filter((m) => m.provider === provider).length;

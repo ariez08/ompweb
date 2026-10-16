@@ -85,6 +85,7 @@
     "path_required",
     "plugin_unsupported_action",
     "preview_unavailable",
+    "profile_unknown",
     "provider_name_required",
     "provider_required",
     "provider_usage_unavailable",

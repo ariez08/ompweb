@@ -5,6 +5,7 @@ import { StringDecoder } from "string_decoder";
 import { resolveSessionPathOr404, apiErrorResponse } from "@/lib/api-utils";
 import { resolvePlanArtifact } from "@/lib/plan-reader";
 import { allowFileRoot } from "@/lib/file-access";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +18,10 @@ const MAX_PLAN_BYTES = 256 * 1024;
  * MAX_PLAN_BYTES of the file are read, cut on a UTF-8 character boundary.
  */
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const ctx = requestProfileContext(req);
   try {
     const { id } = await params;
-    const resolved = await resolveSessionPathOr404(id);
+    const resolved = await resolveSessionPathOr404(id, ctx);
     if ("response" in resolved) return resolved.response;
 
     const artifact = resolvePlanArtifact(resolved.filePath);
@@ -54,7 +56,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       plan,
       planFile: artifact.planPath,
       truncated,
-    });
+    }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (err) {
     return apiErrorResponse(err);
   }

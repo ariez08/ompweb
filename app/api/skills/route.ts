@@ -9,6 +9,7 @@ import {
   setDisableModelInvocation,
 } from "@/lib/skills-service";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 
@@ -16,31 +17,33 @@ export const dynamic = "force-dynamic";
 // Scans the same skill roots omp discovers (~/.omp/agent/skills, project
 // .omp/skills, and the .claude/.agents/.codex/.github compat directories).
 export async function GET(req: Request) {
+  const ctx = requestProfileContext(req);
   const { searchParams } = new URL(req.url);
   const cwd = searchParams.get("cwd");
-  if (!cwd) return NextResponse.json({ error: "cwd required", code: "cwd_required" }, { status: 400 });
+  if (!cwd) return NextResponse.json({ error: "cwd required", code: "cwd_required" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
 
   try {
     const allowedRoots = await getAllowedFileRoots();
     if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied", code: "access_denied" }, { status: 403 });
+      return NextResponse.json({ error: "Access denied", code: "access_denied" }, { status: 403, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
-    return NextResponse.json(await loadSkillsWithInstallInfo(cwd));
+    return NextResponse.json(await loadSkillsWithInstallInfo(cwd, ctx), { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json({ error: String(e) }, { status: 500, headers: { ...PROFILE_SCOPED_HEADERS } });
   }
 }
 
 // PATCH /api/skills — toggle disable-model-invocation on a SKILL.md file
 export async function PATCH(req: Request) {
+  const ctx = requestProfileContext(req);
   try {
     const body = await req.json() as { filePath: string; disableModelInvocation: boolean; cwd?: string };
     const { filePath, disableModelInvocation, cwd } = body;
-    if (!filePath) return NextResponse.json({ error: "filePath required", code: "file_path_required" }, { status: 400 });
+    if (!filePath) return NextResponse.json({ error: "filePath required", code: "file_path_required" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
     if (basename(filePath) !== "SKILL.md") {
-      return NextResponse.json({ error: "not a SKILL.md file", code: "not_a_skill_file" }, { status: 400 });
+      return NextResponse.json({ error: "not a SKILL.md file", code: "not_a_skill_file" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
-    if (!existsSync(filePath)) return NextResponse.json({ error: "file not found", code: "file_not_found" }, { status: 404 });
+    if (!existsSync(filePath)) return NextResponse.json({ error: "file not found", code: "file_not_found" }, { status: 404, headers: { ...PROFILE_SCOPED_HEADERS } });
     // Every root the scanner reads must be writable here, or skills in the
     // compat dirs (~/.agents/skills — where the app's own global installs land,
     // ~/.claude/skills, ~/.codex/skills, managed-skills) could be listed but
@@ -49,14 +52,14 @@ export async function PATCH(req: Request) {
     // An optional cwd (already an allowed root) additionally covers the
     // project walk-up roots discovery visits above the session directory.
     const scanCwd = cwd && isExistingFilePathAllowed(cwd, allowedRoots) ? cwd : undefined;
-    for (const dir of getSkillScanRootDirs(scanCwd)) allowedRoots.add(dir);
+    for (const dir of getSkillScanRootDirs(scanCwd, ctx)) allowedRoots.add(dir);
     // Resolve symlinks once up front and authorize the resolved path: the
     // read/write below then operate on the same resolved path, so a symlink
     // swapped between the authorization check and the write cannot redirect
     // it outside the checked roots.
     const resolvedFilePath = realpathSync(filePath);
     if (!isExistingFilePathAllowed(resolvedFilePath, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied", code: "access_denied" }, { status: 403 });
+      return NextResponse.json({ error: "Access denied", code: "access_denied" }, { status: 403, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
 
     const content = readFileSync(resolvedFilePath, "utf8");
@@ -65,8 +68,8 @@ export async function PATCH(req: Request) {
 
     // Report what the file now says rather than what was asked for.
     const { frontmatter } = parseSkillFrontmatter(updated);
-    return NextResponse.json({ success: true, disableModelInvocation: readDisableModelInvocation(frontmatter) });
+    return NextResponse.json({ success: true, disableModelInvocation: readDisableModelInvocation(frontmatter) }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json({ error: String(e) }, { status: 500, headers: { ...PROFILE_SCOPED_HEADERS } });
   }
 }

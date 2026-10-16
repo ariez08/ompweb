@@ -25,7 +25,7 @@ import { apiErrorResponse, resolveSessionPathOr404 } from "@/lib/api-utils";
 import { recordBackendError } from "@/lib/backend-errors";
 import { sessionPathKey } from "@/lib/paths";
 import { hostClient, rustBackendActive } from "@/lib/omp/host-client";
-import { getAgentDir } from "@/lib/omp/paths";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 import { getRpcSession } from "@/lib/rpc-manager";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
@@ -164,9 +164,10 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const ctx = requestProfileContext(req);
   const { id } = await params;
   try {
-    const resolved = await resolveSessionPathOr404(id);
+    const resolved = await resolveSessionPathOr404(id, ctx);
     if ("response" in resolved) return resolved.response;
     const filePath = resolved.filePath;
 
@@ -182,11 +183,11 @@ export async function GET(
     if (loadError === "too_large") {
       return NextResponse.json(
         { error: "Session file is too large to open in omp-web", code: "session_file_too_large" },
-        { status: 413 },
+        { status: 413, headers: { ...PROFILE_SCOPED_HEADERS } },
       );
     }
     if (!header) {
-      return NextResponse.json({ error: "Session file is missing or malformed", code: "session_file_malformed" }, { status: 404 });
+      return NextResponse.json({ error: "Session file is missing or malformed", code: "session_file_malformed" }, { status: 404, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
     const leafId = getLeafEntryId(entries);
     const tree = projectTreeForResponse(buildSessionTree(entries));
@@ -195,7 +196,7 @@ export async function GET(
     let modified = header.timestamp ?? new Date().toISOString();
     try { modified = statSync(filePath).mtime.toISOString(); } catch { /* use header timestamp */ }
     const parentSessionId = header.parentSession
-      ? await resolveParentSessionId(header.parentSession)
+      ? await resolveParentSessionId(header.parentSession, ctx)
       : undefined;
     const info = {
       path: filePath,
@@ -221,7 +222,7 @@ export async function GET(
     // callers treat a missing `agent` as "fetch it separately".
     let agent: { running: boolean; state?: unknown } | undefined;
     if (includeState) {
-      const rpc = getRpcSession(id);
+      const rpc = getRpcSession(id, ctx);
       if (rpc?.isAlive()) {
         try {
           agent = { running: true, state: await rpc.send({ type: "get_state" }) };
@@ -241,7 +242,7 @@ export async function GET(
       tree,
       context,
       ...(agent ? { agent } : {}),
-    });
+    }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return apiErrorResponse(error);
   }
@@ -252,18 +253,19 @@ export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const ctx = requestProfileContext(req);
   const { id } = await params;
   try {
     const { name } = await req.json() as { name?: string };
     if (typeof name !== "string" || !name.trim()) {
-      return NextResponse.json({ error: "name is required", code: "session_name_required" }, { status: 400 });
+      return NextResponse.json({ error: "name is required", code: "session_name_required" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
     // A running omp process owns its session file; route the rename through it
     // so the in-memory title cannot clobber ours on the next flush. This runs
     // before the path check because omp does not create the session file until
     // the history holds an assistant message.
     let renamed = false;
-    const rpc = getRpcSession(id);
+    const rpc = getRpcSession(id, ctx);
     if (rpc?.isAlive?.() && typeof rpc.send === "function") {
       try {
         await rpc.send({ type: "set_session_name", name: name.trim() });
@@ -275,12 +277,12 @@ export async function PATCH(
       }
     }
     if (!renamed) {
-      const resolved = await resolveSessionPathOr404(id);
+      const resolved = await resolveSessionPathOr404(id, ctx);
       if ("response" in resolved) return resolved.response;
       const filePath = resolved.filePath;
       if (rustBackendActive()) {
         try {
-          await hostClient.sessions.rename(join(getAgentDir(), "sessions"), filePath, name.trim());
+          await hostClient.sessions.rename(join(ctx.agentDir, "sessions"), filePath, name.trim());
         } catch (error) {
           recordBackendError("session_rename_failed", `Rust session.rename failed: ${error instanceof Error ? error.message : String(error)}`);
           throw rustAuthorityError("session_rename_failed", error);
@@ -290,7 +292,7 @@ export async function PATCH(
       }
     }
     invalidateSessionListCache();
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return apiErrorResponse(error);
   }
@@ -298,12 +300,13 @@ export async function PATCH(
 
 // DELETE /api/sessions/[id]
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const ctx = requestProfileContext(req);
   const { id } = await params;
   try {
-    const resolved = await resolveSessionPathOr404(id);
+    const resolved = await resolveSessionPathOr404(id, ctx);
     if ("response" in resolved) return resolved.response;
     const filePath = resolved.filePath;
 
@@ -318,12 +321,12 @@ export async function DELETE(
     let grandparentPath: string | undefined;
     let grandparentId: string | undefined;
     if (parentSession) {
-      const idForPath = await resolveSessionIdByPath(parentSession);
+      const idForPath = await resolveSessionIdByPath(parentSession, ctx);
       if (idForPath) {
         grandparentPath = parentSession;
         grandparentId = idForPath;
       } else {
-        const pathForId = await resolveSessionPath(parentSession);
+        const pathForId = await resolveSessionPath(parentSession, ctx);
         if (pathForId) {
           grandparentPath = pathForId;
           grandparentId = parentSession;
@@ -396,7 +399,7 @@ export async function DELETE(
         // in-memory state on write — our rewrite would be clobbered by (or
         // interleaved with) its next flush.
         const childId = typeof header.id === "string" ? header.id : undefined;
-        if (childId && getRpcSession(childId)?.isAlive?.()) {
+        if (childId && getRpcSession(childId, ctx)?.isAlive?.()) {
           skippedChildren.push({ id: childId, reason: "session_child_live" });
           continue;
         }
@@ -418,10 +421,10 @@ export async function DELETE(
 
     // Await the child's exit before unlinking: omp flushes session state on
     // shutdown and would recreate the file if it were still running.
-    await getRpcSession(id)?.destroyAndWait?.();
+    await getRpcSession(id, ctx)?.destroyAndWait?.();
     if (rustBackendActive()) {
       try {
-        await hostClient.sessions.delete(join(getAgentDir(), "sessions"), filePath);
+        await hostClient.sessions.delete(join(ctx.agentDir, "sessions"), filePath);
       } catch (error) {
         // No Hidden Fallback (Phase 1): the Node file deletion exists only in
         // the explicit OMPWEB_BACKEND=node rollback mode.
@@ -431,12 +434,12 @@ export async function DELETE(
     } else {
       deleteSessionFileWithArtifacts(filePath);
     }
-    invalidateSessionPathCache(id);
+    invalidateSessionPathCache(id, ctx);
     invalidateSessionListCache();
     return NextResponse.json({
       ok: true,
       ...(skippedChildren.length > 0 ? { skippedChildren } : {}),
-    });
+    }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return apiErrorResponse(error);
   }

@@ -7,6 +7,7 @@ import { promisify } from "util";
 import { NextResponse } from "next/server";
 import { resolveOmpBin } from "@/lib/omp/omp-cli";
 import { apiErrorResponse, resolveSessionPathOr404 } from "@/lib/api-utils";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,11 +47,12 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const ctx = requestProfileContext(req);
   const { id } = await params;
   const inline = new URL(req.url).searchParams.get("inline") === "1";
 
   try {
-    const resolved = await resolveSessionPathOr404(id);
+    const resolved = await resolveSessionPathOr404(id, ctx);
     if ("response" in resolved) return resolved.response;
     const filePath = resolved.filePath;
 
@@ -69,7 +71,7 @@ export async function GET(
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "Content-Disposition": getContentDisposition(fileName, inline),
-          "Cache-Control": "no-cache",
+          ...PROFILE_SCOPED_HEADERS,
         },
       });
     } finally {
@@ -78,7 +80,7 @@ export async function GET(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("omp binary not found")) {
-      return NextResponse.json({ error: message, code: "omp_not_found" }, { status: 500 });
+      return NextResponse.json({ error: message, code: "omp_not_found" }, { status: 500, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
     return apiErrorResponse(error);
   }

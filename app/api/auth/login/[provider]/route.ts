@@ -3,6 +3,8 @@ import { invalidateModelsCache } from "@/lib/models-cache";
 import { enableProvider } from "@/lib/omp/model-roles";
 import { RpcProcess, type RpcFrame } from "@/lib/omp/rpc-process";
 import { disposeUtilityRpc } from "@/lib/omp/rpc-utility";
+import { hostEnvFor } from "@/lib/omp/profile-context";
+import { requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +71,11 @@ export async function GET(
   { params }: { params: Promise<{ provider: string }> }
 ) {
   const { provider } = await params;
+  // Credentials and model roles live in the agent dir, so the login child must
+  // run pinned to the REQUEST profile. Unpinned it writes the OAuth token to
+  // whichever profile ompweb was launched with, and the UI then shows the
+  // provider as logged out.
+  const ctx = requestProfileContext(req);
   const token = `${provider}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const registry = getLoginRegistry();
   const encoder = new TextEncoder();
@@ -134,7 +141,12 @@ export async function GET(
       };
 
       try {
-        proc = new RpcProcess({ cwd: homedir(), extraArgs: LOGIN_EXTRA_ARGS, onFrame: handleFrame });
+        proc = new RpcProcess({
+          cwd: homedir(),
+          extraArgs: LOGIN_EXTRA_ARGS,
+          env: hostEnvFor(ctx),
+          onFrame: handleFrame,
+        });
       } catch (error) {
         send({ type: "error", message: error instanceof Error ? error.message : String(error) });
         clearInterval(heartbeat);
@@ -168,9 +180,9 @@ export async function GET(
         const ready = await child.waitReady(READY_TIMEOUT_MS);
         await child.negotiateProtocol(ready);
         await child.sendCommand({ type: "login", providerId: provider }, LOGIN_TIMEOUT_MS);
-        enableProvider(provider);
+        enableProvider(provider, ctx);
         invalidateModelsCache();
-        disposeUtilityRpc();
+        disposeUtilityRpc(ctx);
         send({ type: "success" });
       } catch (error) {
         if (req.signal.aborted) {

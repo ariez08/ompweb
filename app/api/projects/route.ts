@@ -17,6 +17,7 @@ import {
   validateProjectPath,
 } from "@/lib/project-registry";
 import { listAllSessions } from "@/lib/session-reader";
+import { requestProfileContext, PROFILE_SCOPED_HEADERS } from "@/lib/omp/profile-cookie";
 import { resolveProject } from "@/lib/worktree";
 import type { ManagedProject } from "@/lib/types";
 
@@ -25,10 +26,11 @@ import type { ManagedProject } from "@/lib/types";
 // hidden entries. Session-discovered paths get no addedAt; the client orders
 // the merged list by most-recently-added (registration order), then by path —
 // deliberately not by session activity, which would reorder rows on refresh.
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const registry = loadProjectRegistry();
-    const sessions = await listAllSessions();
+    const ctx = requestProfileContext(request);
+    const registry = loadProjectRegistry(ctx);
+    const sessions = await listAllSessions(ctx);
     const discovered = existingDiscoveredProjectPaths(
       sessions
         .map((s) => s.projectRoot ?? s.cwd)
@@ -39,7 +41,7 @@ export async function GET() {
     // have no sessions (the in-memory list does not survive restarts, and an
     // empty managed project derives no root from sessions).
     for (const project of projects) allowFileRoot(project.path);
-    return NextResponse.json({ projects });
+    return NextResponse.json({ projects }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return apiErrorResponse(error);
   }
@@ -49,19 +51,20 @@ export async function GET() {
 // Validates the directory, resolves Git worktrees to their main projectRoot,
 // registers and authorizes it, and unhides it if it was previously hidden.
 export async function POST(req: Request) {
+  const ctx = requestProfileContext(req);
   try {
     const body = await req.json() as { cwd?: unknown };
     const cwd = typeof body.cwd === "string" ? body.cwd : "";
     const normalized = validateProjectPath(cwd);
     const { projectRoot } = await resolveProject(normalized);
 
-    const registry = loadProjectRegistry();
+    const registry = loadProjectRegistry(ctx);
     const next = upsertProject(registry, projectRoot);
-    saveProjectRegistry(next);
+    saveProjectRegistry(next, ctx);
     allowFileRoot(projectRoot);
 
     const entry = next.projects.find((p) => comparableProjectPath(p.path) === comparableProjectPath(projectRoot))!;
-    return NextResponse.json({ project: { path: entry.path, addedAt: entry.addedAt } satisfies ManagedProject });
+    return NextResponse.json({ project: { path: entry.path, addedAt: entry.addedAt } satisfies ManagedProject }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     if (error instanceof ProjectPathError) {
       return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
@@ -80,6 +83,7 @@ export async function POST(req: Request) {
 const MAX_PRESENTATION_UPDATES = 500;
 
 export async function PATCH(req: Request) {
+  const ctx = requestProfileContext(req);
   try {
     const body = await req.json() as {
       cwd?: unknown;
@@ -103,7 +107,7 @@ export async function PATCH(req: Request) {
     // deleted" (allow reorder/alias) from "session-discovered ghost" (must not
     // auto-register a deleted path). validateProjectPath is still required for
     // the latter.
-    const earlyRegistry = loadProjectRegistry();
+    const earlyRegistry = loadProjectRegistry(ctx);
     const isAlreadyManaged = (cwd: string): string | null => {
       // Cheap check without stat: resolve ~ and relative, then compare.
       // Mirrors validateProjectPath's normalizeCwd + canonicalProjectPath fallback.
@@ -185,7 +189,7 @@ export async function PATCH(req: Request) {
       } : update);
     }
 
-    let registry = loadProjectRegistry();
+    let registry = loadProjectRegistry(ctx);
     const newRoots: string[] = [];
     for (const update of merged.values()) {
       const key = comparableProjectPath(update.path);
@@ -201,7 +205,7 @@ export async function PATCH(req: Request) {
       return !entry?.hidden;
     });
     const next = updateProjectsPresentation(registry, updates);
-    saveProjectRegistry(next);
+    saveProjectRegistry(next, ctx);
     // Only after a successful save: a failed write must not leave an orphaned
     // in-memory browse authorization behind.
     for (const root of newRoots) allowFileRoot(root);
@@ -210,7 +214,7 @@ export async function PATCH(req: Request) {
     const projects = next.projects
       .filter((entry) => updatedKeys.has(comparableProjectPath(entry.path)))
       .map((entry) => ({ path: entry.path, addedAt: entry.addedAt, hidden: entry.hidden, alias: entry.alias, sortOrder: entry.sortOrder }));
-    return NextResponse.json({ projects });
+    return NextResponse.json({ projects }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) { return apiErrorResponse(error); }
 }
 
@@ -218,6 +222,7 @@ export async function PATCH(req: Request) {
 // Hides the project from the sidebar without touching its directory or
 // sessions. Re-adding the directory (POST) restores it.
 export async function DELETE(req: Request) {
+  const ctx = requestProfileContext(req);
   try {
     const body = await req.json() as { cwd?: unknown };
     const cwd = typeof body.cwd === "string" ? body.cwd.trim() : "";
@@ -226,9 +231,9 @@ export async function DELETE(req: Request) {
     }
     // Canonicalize worktree paths so hiding a worktree hides its whole project.
     const { projectRoot } = await resolveProject(cwd);
-    const registry = loadProjectRegistry();
-    saveProjectRegistry(hideProject(registry, projectRoot));
-    return NextResponse.json({ success: true });
+    const registry = loadProjectRegistry(ctx);
+    saveProjectRegistry(hideProject(registry, projectRoot), ctx);
+    return NextResponse.json({ success: true }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return apiErrorResponse(error);
   }

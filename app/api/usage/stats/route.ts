@@ -3,6 +3,8 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { resolveOmpBin } from "@/lib/omp/omp-cli";
 import { aggregateFromStatsDb } from "@/lib/stats-aggregate";
+import { hostEnvFor, type ProfileContext } from "@/lib/omp/profile-context";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 
@@ -14,8 +16,10 @@ interface CachedStatsData {
   data: Record<string, unknown>;
 }
 
-let cachedStats: CachedStatsData | null = null;
-let inFlightPromise: Promise<Record<string, unknown>> | null = null;
+// Profile-keyed: one ompweb process answers for several profiles, and a single
+// shared entry would serve profile A's aggregates to profile B's dashboard.
+const cachedStatsByProfile = new Map<string, CachedStatsData>();
+const inFlightByProfile = new Map<string, Promise<Record<string, unknown>>>();
 
 /**
  * omp stats --json can return zeroed aggregates (observed with omp/18.1.2 on
@@ -34,15 +38,18 @@ function statsLookMeaningful(parsed: Record<string, unknown>): boolean {
   return reqs > 0 || inp > 0 || out > 0 || byModel.length > 0;
 }
 
-async function fetchStatsData(): Promise<Record<string, unknown>> {
+async function fetchStatsData(ctx: ProfileContext): Promise<Record<string, unknown>> {
   const ompBin = resolveOmpBin();
   if (!ompBin) {
     throw new Error("omp binary not found on PATH or OMP_WEB_OMP_BIN");
   }
 
+  // The CLI resolves its own profile from the environment, so pin it; without
+  // this the subprocess reads the process profile regardless of the request.
+  const execOpts = { timeout: 30_000, maxBuffer: 10 * 1024 * 1024, env: hostEnvFor(ctx) };
   const [statsResult, usageResult] = await Promise.allSettled([
-    execFileAsync(ompBin, ["stats", "--json"], { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }),
-    execFileAsync(ompBin, ["usage", "--json"], { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }),
+    execFileAsync(ompBin, ["stats", "--json"], execOpts),
+    execFileAsync(ompBin, ["usage", "--json"], execOpts),
   ]);
 
   let parsedStats: Record<string, unknown> = {};
@@ -78,7 +85,7 @@ async function fetchStatsData(): Promise<Record<string, unknown>> {
 
   if (!statsLookMeaningful(parsedStats)) {
     try {
-      const db = await aggregateFromStatsDb();
+      const db = await aggregateFromStatsDb(ctx);
       if (db && db.overall && (db.overall.totalRequests > 0 || db.overall.totalInputTokens > 0)) {
         console.warn("omp stats --json returned empty aggregates; fell back to stats.db aggregation");
         parsedStats = db as unknown as Record<string, unknown>;
@@ -103,34 +110,38 @@ async function fetchStatsData(): Promise<Record<string, unknown>> {
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const ctx = requestProfileContext(request);
   const now = Date.now();
-  if (cachedStats && cachedStats.expiresAt > now) {
-    return NextResponse.json(cachedStats.data);
+  const cached = cachedStatsByProfile.get(ctx.key);
+  if (cached && cached.expiresAt > now) {
+    return NextResponse.json(cached.data, { headers: { ...PROFILE_SCOPED_HEADERS } });
   }
 
-  if (!inFlightPromise) {
-    inFlightPromise = fetchStatsData()
+  let inFlight = inFlightByProfile.get(ctx.key);
+  if (!inFlight) {
+    inFlight = fetchStatsData(ctx)
       .then((data) => {
-        cachedStats = {
+        cachedStatsByProfile.set(ctx.key, {
           expiresAt: Date.now() + STATS_CACHE_TTL_MS,
           data,
-        };
+        });
         return data;
       })
       .finally(() => {
-        inFlightPromise = null;
+        if (inFlightByProfile.get(ctx.key) === inFlight) inFlightByProfile.delete(ctx.key);
       });
+    inFlightByProfile.set(ctx.key, inFlight);
   }
 
   try {
-    const data = await inFlightPromise;
-    return NextResponse.json(data);
+    const data = await inFlight;
+    return NextResponse.json(data, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     console.error("Failed to retrieve usage stats:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },
-      { status: 500 }
+      { status: 500, headers: { ...PROFILE_SCOPED_HEADERS } }
     );
   }
 }

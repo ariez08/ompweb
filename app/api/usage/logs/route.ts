@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { join } from "path";
-import { homedir } from "os";
 import { existsSync } from "fs";
-
+import { requestProfileContext, PROFILE_SCOPED_HEADERS } from "@/lib/omp/profile-cookie";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  const ctx = requestProfileContext(request);
   const url = new URL(request.url);
   const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get("limit") ?? "50", 10)));
   const offset = Math.max(0, parseInt(url.searchParams.get("offset") ?? "0", 10));
@@ -14,9 +14,9 @@ export async function GET(request: Request) {
   const provider = url.searchParams.get("provider")?.trim();
   const q = url.searchParams.get("q")?.trim();
 
-  const dbPath = join(homedir(), ".omp", "stats.db");
+  const dbPath = join(ctx.configRoot, "stats.db");
   if (!existsSync(dbPath)) {
-    return NextResponse.json({ total: 0, logs: [] });
+    return NextResponse.json({ total: 0, logs: [] }, { headers: PROFILE_SCOPED_HEADERS });
   }
 
   try {
@@ -67,12 +67,12 @@ export async function GET(request: Request) {
       const dataStmt = db.prepare(dataQuery);
       const logs = dataStmt.all(...params, limit, offset);
 
-      return NextResponse.json({ total, logs });
+      return NextResponse.json({ total, logs }, { headers: PROFILE_SCOPED_HEADERS });
     } finally {
       try { db.close(); } catch { /* ignore */ }
     }
   } catch (error) {
     console.error("Failed to query stats.db:", error);
-    return NextResponse.json({ total: 0, logs: [], error: String(error) }, { status: 500 });
+    return NextResponse.json({ total: 0, logs: [], error: String(error) }, { status: 500, headers: PROFILE_SCOPED_HEADERS });
   }
 }

@@ -4,6 +4,7 @@ import { deriveSessionTitleFromFirstMessage, sanitizeSessionTitle } from "@/lib/
 import { getRpcSession } from "@/lib/rpc-manager";
 import { invalidateSessionListCache } from "@/lib/session-reader";
 import { resolveSessionPathOr404 } from "@/lib/api-utils";
+import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 /**
  * POST /api/sessions/[id]/auto-name
@@ -14,9 +15,10 @@ import { resolveSessionPathOr404 } from "@/lib/api-utils";
  * derived from the first user message (persisted so the sidebar updates).
  */
 export async function POST(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const ctx = requestProfileContext(req);
   const { id } = await params;
 
   try {
@@ -24,7 +26,7 @@ export async function POST(
     // than the file's slot while a rewrite is pending). This runs before the
     // path check because omp does not create the session file until the history
     // holds an assistant message.
-    const rpc = getRpcSession(id);
+    const rpc = getRpcSession(id, ctx);
     const running = Boolean(rpc?.isAlive?.());
     if (running && typeof rpc?.send === "function") {
       try {
@@ -32,28 +34,28 @@ export async function POST(
         const liveTitle = sanitizeSessionTitle(state?.sessionName);
         if (liveTitle) {
           invalidateSessionListCache();
-          return NextResponse.json({ title: liveTitle, usage: null });
+          return NextResponse.json({ title: liveTitle, usage: null }, { headers: { ...PROFILE_SCOPED_HEADERS } });
         }
       } catch {
         // Fall through to the on-disk title.
       }
     }
 
-    const resolved = await resolveSessionPathOr404(id);
+    const resolved = await resolveSessionPathOr404(id, ctx);
     if ("response" in resolved) return resolved.response;
     const filePath = resolved.filePath;
 
     const info = scanSessionInfo(filePath, false);
     const storedTitle = sanitizeSessionTitle(info?.title);
     if (storedTitle) {
-      return NextResponse.json({ title: storedTitle, usage: null });
+      return NextResponse.json({ title: storedTitle, usage: null }, { headers: { ...PROFILE_SCOPED_HEADERS } });
     }
 
     const derived = deriveSessionTitleFromFirstMessage(info?.firstMessage);
     if (!derived) {
       return NextResponse.json(
         { error: "The session has no user messages to name", code: "session_no_messages_to_name" },
-        { status: 409 },
+        { status: 409, headers: { ...PROFILE_SCOPED_HEADERS } },
       );
     }
 
@@ -63,11 +65,11 @@ export async function POST(
       setSessionTitle(filePath, derived, "auto");
     }
     invalidateSessionListCache();
-    return NextResponse.json({ title: derived, usage: null });
+    return NextResponse.json({ title: derived, usage: null }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },
-      { status: 500 },
+      { status: 500, headers: { ...PROFILE_SCOPED_HEADERS } },
     );
   }
 }

@@ -8,6 +8,7 @@ import { listQuickScripts } from "@/lib/project-scripts";
 import { proxyEnv } from "@/lib/proxy-config";
 import { recordBackendError } from "@/lib/backend-errors";
 import { hostClient, rustBackendActive } from "@/lib/omp/host-client";
+import { requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,7 @@ const MAX_OUTPUT_BYTES = 20 * 1024;
  * contract, exactly like a Makefile target.
  */
 export async function POST(req: Request) {
+  const ctx = requestProfileContext(req);
   try {
     const body = await req.json().catch(() => ({})) as { cwd?: unknown; name?: unknown; mode?: unknown };
     if (typeof body.cwd !== "string" || typeof body.name !== "string" || !body.name.trim()) {
@@ -45,7 +47,7 @@ export async function POST(req: Request) {
     }
 
     // Command source is the on-disk registry — never the request body.
-    const script = listQuickScripts(project.projectRoot).find((s) => s.name === scriptName);
+    const script = listQuickScripts(project.projectRoot, ctx).find((s) => s.name === scriptName);
     if (!script) {
       return NextResponse.json({ error: "Unknown script", code: "invalid_request" }, { status: 404 });
     }

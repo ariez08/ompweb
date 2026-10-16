@@ -27,6 +27,7 @@ import {
 import { listDirectoryEntries } from "@/lib/directory-listing";
 import { getLanguage } from "@/lib/file-language";
 import { isFilePathReferencedBySession } from "@/lib/session-file-references";
+import { requestProfileContext } from "@/lib/omp/profile-cookie";
 import {
   inspectUploadTargets,
   parseUploadConflictStrategy,
@@ -434,6 +435,7 @@ export async function GET(
       return NextResponse.json({ error: "Invalid file request type", code: "invalid_request_type" }, { status: 400 });
     }
     const sessionId = request.nextUrl.searchParams.get("sessionId");
+    const ctx = requestProfileContext(request);
 
     const allowedRoots = await getAllowedFileRoots();
     // Normalize line/range suffix and resolve against allowed roots if relative
@@ -460,7 +462,7 @@ export async function GET(
       !allowedByRoot &&
       !allowedByOmpImage &&
       type !== "list" &&
-      await isFilePathReferencedBySession(filePath, sessionId);
+      await isFilePathReferencedBySession(filePath, sessionId, ctx);
     if (!allowedByRoot && !allowedByOmpImage && !allowedBySessionReference) {
       return NextResponse.json({ error: "Access denied", code: "access_denied" }, { status: 403 });
     }
