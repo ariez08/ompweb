@@ -19,6 +19,10 @@ interface Props {
   onToggle?: () => void;
   /** Whether a session is currently active (used to show appropriate empty reason) */
   hasSession?: boolean;
+  /** Fork the current active session into a new branch */
+  onForkSession?: () => void;
+  /** True while fork action is in flight */
+  forkDisabled?: boolean;
 }
 
 // Find the visible entry IDs on the path from root to activeLeafId.
@@ -254,7 +258,7 @@ const TreeNodeView = memo(function TreeNodeView({ node, activePathIds, depth, is
   return true;
 });
 
-export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession }: Props) {
+export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession, onForkSession, forkDisabled }: Props) {
   const { t } = useI18n();
   const [openInternal, setOpenInternal] = useState(false);
   const open = openProp !== undefined ? openProp : openInternal;
@@ -398,6 +402,56 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
                 {noBranchReason}
               </div>
             )}
+            {hasSession && onForkSession && (
+              <div
+                style={{
+                  borderTop: "1px solid var(--border)",
+                  padding: "8px 12px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  background: "var(--bg-panel)",
+                  position: "sticky",
+                  bottom: 0,
+                  zIndex: 10,
+                }}
+              >
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  {t("branchNavigator.forkSessionHint")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onForkSession();
+                    if (onToggle) onToggle();
+                    else setOpenInternal(false);
+                  }}
+                  disabled={forkDisabled}
+                  className="ui-focus-ring"
+                  title={t("appShell.forkSessionTitle")}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    height: 26,
+                    padding: "0 10px",
+                    background: "var(--accent-strong)",
+                    color: "var(--on-accent)",
+                    border: "none",
+                    borderRadius: 6,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: forkDisabled ? "not-allowed" : "pointer",
+                    opacity: forkDisabled ? 0.6 : 1,
+                    transition: "background-color var(--dur-fast) var(--ease-out-warm)",
+                  }}
+                >
+                  <GitBranch size={12} strokeWidth={2} aria-hidden="true" />
+                  <span>{t("appShell.forkSession")}</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -457,6 +511,49 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
           ) : (
             <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
               {noBranchReason ?? t("branchNavigator.noBranches")}
+            </div>
+          )}
+          {hasSession && onForkSession && (
+            <div
+              style={{
+                borderTop: "1px solid var(--border)",
+                padding: "8px 12px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                background: "var(--bg-panel)",
+              }}
+            >
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                {t("branchNavigator.forkSessionHint")}
+              </span>
+              <button
+                type="button"
+                onClick={() => onForkSession()}
+                disabled={forkDisabled}
+                className="ui-focus-ring"
+                title={t("appShell.forkSessionTitle")}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  height: 26,
+                  padding: "0 10px",
+                  background: "var(--accent-strong)",
+                  color: "var(--on-accent)",
+                  border: "none",
+                  borderRadius: 6,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: forkDisabled ? "not-allowed" : "pointer",
+                  opacity: forkDisabled ? 0.6 : 1,
+                  transition: "background-color var(--dur-fast) var(--ease-out-warm)",
+                }}
+              >
+                <GitBranch size={12} strokeWidth={2} aria-hidden="true" />
+                <span>{t("appShell.forkSession")}</span>
+              </button>
             </div>
           )}
         </div>

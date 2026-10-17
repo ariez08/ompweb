@@ -161,6 +161,7 @@
   "appShell.viewFullHistory": "View full history",
   "branchNavigator.assistantLabel": "[assistant]",
   "branchNavigator.branches": "Branches",
+  "branchNavigator.forkSessionHint": "Create a new branch from this session",
   "branchNavigator.noActiveSession": "No active session",
   "branchNavigator.noBranches": "This session has no branches",
   "branchNavigator.roleAssistant": "A",

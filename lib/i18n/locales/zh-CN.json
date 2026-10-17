@@ -161,6 +161,7 @@
   "appShell.viewFullHistory": "查看完整历史",
   "branchNavigator.assistantLabel": "[助手]",
   "branchNavigator.branches": "分支",
+  "branchNavigator.forkSessionHint": "基于此会话创建新分支",
   "branchNavigator.noActiveSession": "没有活动会话",
   "branchNavigator.noBranches": "此会话没有分支",
   "branchNavigator.roleAssistant": "A",

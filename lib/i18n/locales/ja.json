@@ -161,6 +161,7 @@
   "appShell.viewFullHistory": "全履歴を表示",
   "branchNavigator.assistantLabel": "[アシスタント]",
   "branchNavigator.branches": "ブランチ",
+  "branchNavigator.forkSessionHint": "このセッションから新しいブランチを作成",
   "branchNavigator.noActiveSession": "アクティブなセッションがありません",
   "branchNavigator.noBranches": "このセッションにはブランチがありません",
   "branchNavigator.roleAssistant": "A",

@@ -1465,7 +1465,9 @@ export function AppShell() {
                 containerRef={topBarRef}
                 open={activeTopPanel === "branches"}
                 onToggle={() => toggleTopPanel("branches")}
-                hasSession
+                hasSession={Boolean(selectedSession)}
+                onForkSession={handleForkCurrentSession}
+                forkDisabled={actionBusy}
               />
               <button
                 ref={systemBtnRef}
