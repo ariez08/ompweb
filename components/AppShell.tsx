@@ -1525,7 +1525,7 @@ export function AppShell() {
             if (currentSpeedStr) tooltipParts.push(t("appShell.tooltipCurrentSpeed", { value: currentSpeedStr }));
             if (averageSpeedStr) tooltipParts.push(t("appShell.tooltipAverageSpeed", { value: averageSpeedStr }));
             const lockLabel = sessionLockState.kind === "cli"
-              ? `[${t("appShell.lockStatusCli", { pid: String(sessionLockState.pid ?? "") })}]`
+              ? `[${sessionLockState.pid ? t("appShell.lockStatusCli", { pid: String(sessionLockState.pid) }) : t("appShell.lockStatusCliNoPid")}]`
               : sessionLockState.kind === "web"
               ? `[${t("appShell.lockStatusWeb")}]`
               : `[${t("appShell.lockStatusReleased")}]`;
@@ -1884,7 +1884,7 @@ export function AppShell() {
                             />
                             <span style={{ fontSize: 11, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                               {sessionLockState.kind === "cli"
-                                ? t("appShell.lockStatusCli", { pid: String(sessionLockState.pid ?? "") })
+                                ? (sessionLockState.pid ? t("appShell.lockStatusCli", { pid: String(sessionLockState.pid) }) : t("appShell.lockStatusCliNoPid"))
                                 : sessionLockState.kind === "web"
                                 ? t("appShell.lockStatusWeb")
                                 : t("appShell.lockStatusReleased")}

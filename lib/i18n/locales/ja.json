@@ -107,6 +107,7 @@
   "appShell.sessionInfoLoadHint": "メッセージを送信するか /session を実行するとセッション情報が読み込まれます",
   "appShell.lockStatusWeb": "Web UI実行中 · ロック保持",
   "appShell.lockStatusCli": "ターミナルCLI実行中 (PID {pid})",
+  "appShell.lockStatusCliNoPid": "ターミナルCLI実行中",
   "appShell.lockStatusReleased": "解放済み · アイドル状態",
   "appShell.releaseSession": "セッション解放",
   "appShell.releaseSessionTitle": "ターミナルCLIが競合なく再開できるようロックを解放します",

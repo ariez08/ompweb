@@ -1174,16 +1174,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (modelApplied && liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
           if (liveState.fastModeEnabled !== undefined) setFastModeEnabled(liveState.fastModeEnabled);
           setFastModeActive(liveState.fastModeActive);
-          if (agentState.cliLocked && typeof agentState.cliLockPid === "number") {
-            setCliLockPid(agentState.cliLockPid);
-            setSessionLockKind("cli");
-          } else if (agentState.webActive || (agentState.running && !agentState.external)) {
-            setCliLockPid(null);
-            setSessionLockKind("web");
-          } else {
-            setCliLockPid(null);
-            setSessionLockKind("idle");
-          }
           if (liveState.autoRetryEnabled !== undefined) setAutoRetryEnabled(liveState.autoRetryEnabled);
           if (liveState.interruptMode !== undefined) setInterruptMode(liveState.interruptMode);
           if (liveState.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(liveState.autoCompactionEnabled);
@@ -1195,6 +1185,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (liveState.queuedMessageCount === 0 && Date.now() - queueMutatedAtRef.current >= 5000) setQueuedMessages(EMPTY_QUEUE);
         } else if (!agentState.running && Date.now() - queueMutatedAtRef.current >= 5000) {
           setQueuedMessages(EMPTY_QUEUE);
+        }
+
+        if (agentState.cliLocked && typeof agentState.cliLockPid === "number") {
+          setCliLockPid(agentState.cliLockPid);
+          setSessionLockKind("cli");
+        } else if (agentState.webActive || (agentState.running && !agentState.external)) {
+          setCliLockPid(null);
+          setSessionLockKind("web");
+        } else {
+          setCliLockPid(null);
+          setSessionLockKind("idle");
         }
         if (showLoading) setLoading(false);
         return agentState;

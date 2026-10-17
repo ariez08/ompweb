@@ -107,6 +107,7 @@
   "appShell.sessionInfoLoadHint": "Send a message or run /session to load session info",
   "appShell.lockStatusWeb": "Web UI Active · Lock held",
   "appShell.lockStatusCli": "Terminal CLI Active (PID {pid})",
+  "appShell.lockStatusCliNoPid": "Terminal CLI Active",
   "appShell.lockStatusReleased": "Released · Idle on disk",
   "appShell.releaseSession": "Release Session",
   "appShell.releaseSessionTitle": "Release lock so terminal CLI can resume without conflict",
