@@ -56,6 +56,7 @@ interface Props {
    *  Called with the latest roster array reference on every change and with
    *  null when this session view unmounts (session switch). */
   onSubagentsChange?: (roster: SubagentInfo[] | null) => void;
+  onSessionLockChange?: (info: { kind: "cli" | "web" | "idle"; pid?: number | null }) => void;
 }
 
 function phaseLabel(phase: AgentPhase): string {
@@ -490,7 +491,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
     </>
   );
 });
-export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onModelCapacityChange, onGenerationSpeedChange, onOpenFile, onOpenPlan, onSubagentsChange }: Props) {
+export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onModelCapacityChange, onGenerationSpeedChange, onOpenFile, onOpenPlan, onSubagentsChange, onSessionLockChange }: Props) {
   const { t, tn } = useI18n();
   const isMobile = useIsMobile();
   // The minimap sits over the transcript's right edge on desktop. Reserve its
@@ -519,7 +520,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
   }, [chatInputRef]);
 
   const {
-    loading, error, messages, entryIds, showPreCompactionHistory, streamState, cliLockPid,
+    loading, error, messages, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, thinkingLevel, fastModeEnabled, fastModeActive,
     liveModelMeta,
     retryInfo, contextUsage, forkingEntryId,
@@ -552,6 +553,9 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
   const modelCapacityRef = useRef(modelCapacity);
   modelCapacityRef.current = modelCapacity;
   useEffect(() => { onModelCapacityChange?.(modelCapacityRef.current); }, [modelCapacityKey, onModelCapacityChange]);
+  useEffect(() => {
+    onSessionLockChange?.({ kind: sessionLockKind, pid: cliLockPid });
+  }, [sessionLockKind, cliLockPid, onSessionLockChange]);
   const hasCompaction = messages.some((message) => message.role === "custom" && (message as CustomMessage).customType === "compaction");
   const [generationSpeed, setGenerationSpeed] = useState<GenerationSpeedInfo | null>(null);
   const speedSamplesRef = useRef<number[]>([]);

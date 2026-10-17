@@ -709,6 +709,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [advisorEnabled, setAdvisorEnabled] = useState(false);
   const activeSubagentCount = subagents.filter((subagent) => subagent.source !== "history" && subagent.status === "started").length;
   const [cliLockPid, setCliLockPid] = useState<number | null>(null);
+  const [sessionLockKind, setSessionLockKind] = useState<"cli" | "web" | "idle">("idle");
 
   const eventSourceRef = useRef<EventSubscription | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1098,6 +1099,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         externalRunningRef.current = false;
         setCliLockPid(null);
+        setSessionLockKind("idle");
       }
       const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
       const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}?${params}`);
@@ -1154,7 +1156,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const token = beginAuthoritativeModelSync();
         const stateRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
         if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
-        const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse; external?: boolean; cliLocked?: boolean; cliLockPid?: number };
+        const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse; external?: boolean; cliLocked?: boolean; cliLockPid?: number; webActive?: boolean };
         if (sessionIdRef.current !== sid) {
           if (showLoading) setLoading(false);
           return null;
@@ -1172,8 +1174,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (modelApplied && liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
           if (liveState.fastModeEnabled !== undefined) setFastModeEnabled(liveState.fastModeEnabled);
           setFastModeActive(liveState.fastModeActive);
-          if (agentState.cliLocked && typeof agentState.cliLockPid === "number") setCliLockPid(agentState.cliLockPid);
-          else if (agentState.cliLocked === false) setCliLockPid(null);
+          if (agentState.cliLocked && typeof agentState.cliLockPid === "number") {
+            setCliLockPid(agentState.cliLockPid);
+            setSessionLockKind("cli");
+          } else if (agentState.webActive || (agentState.running && !agentState.external)) {
+            setCliLockPid(null);
+            setSessionLockKind("web");
+          } else {
+            setCliLockPid(null);
+            setSessionLockKind("idle");
+          }
           if (liveState.autoRetryEnabled !== undefined) setAutoRetryEnabled(liveState.autoRetryEnabled);
           if (liveState.interruptMode !== undefined) setInterruptMode(liveState.interruptMode);
           if (liveState.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(liveState.autoCompactionEnabled);
@@ -2555,6 +2565,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     promptRunIdRef.current = promptRunId;
     agentRunningRef.current = true;
     setAgentRunning(true);
+    setSessionLockKind("web");
     setAgentPhase(isSlashCommandPrompt ? { kind: "running_command" } : { kind: "waiting_model" });
     setAdvisorActiveAt(0);
     dispatch({ type: "start" });
@@ -3322,9 +3333,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             externalRunningRef.current = true;
             if (agentState.cliLocked && agentState.cliLockPid) {
               setCliLockPid(agentState.cliLockPid);
+              setSessionLockKind("cli");
               addNotice({ type: "warning", message: translate("agentSession.lockedByCliNotice", { pid: String(agentState.cliLockPid) }) });
             } else {
               setCliLockPid(null);
+              setSessionLockKind(agentState.webActive ? "web" : "idle");
               agentRunningRef.current = true;
               setAgentRunning(true);
               setAgentPhase({ kind: "running_command" });
@@ -3337,12 +3350,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             if (externalPollRef.current) clearInterval(externalPollRef.current);
             externalPollRef.current = setInterval(() => {
               void fetch(`/api/sessions/${encodeURIComponent(session.id)}/state`)
-                .then((res) => (res.ok ? res.json() as Promise<{ external?: boolean; cliLocked?: boolean; cliLockPid?: number }> : null))
+                .then((res) => (res.ok ? res.json() as Promise<{ external?: boolean; cliLocked?: boolean; cliLockPid?: number; webActive?: boolean }> : null))
                 .then((st) => {
                   if (st?.cliLocked && typeof st.cliLockPid === "number") {
                     setCliLockPid(st.cliLockPid);
+                    setSessionLockKind("cli");
+                  } else if (st?.webActive) {
+                    setSessionLockKind("web");
+                  } else if (st?.external === false) {
+                    setSessionLockKind("idle");
                   }
-                  if (!st || st.external !== false) return;
                   if (externalPollRef.current) {
                     clearInterval(externalPollRef.current);
                     externalPollRef.current = null;
@@ -3566,7 +3583,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   return {
     // State
-    data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState, cliLockPid,
+    data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
     agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,

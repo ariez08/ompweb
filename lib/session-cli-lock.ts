@@ -105,7 +105,6 @@ async function queryLockedSessionsUnix(): Promise<Map<string, CliLockInfo>> {
   }
   return map;
 }
-
 /**
  * Returns a map of all session IDs currently held by an external CLI/terminal
  * process, keyed by lowercase session ID. Results are cached for 2.5 seconds to
@@ -113,7 +112,7 @@ async function queryLockedSessionsUnix(): Promise<Map<string, CliLockInfo>> {
  */
 export async function listCliLockedSessions(): Promise<Map<string, CliLockInfo>> {
   const now = Date.now();
-  if (now - cacheTimestamp < CACHE_TTL_MS && cachedMap.size > 0) {
+  if (now - cacheTimestamp < CACHE_TTL_MS) {
     return cachedMap;
   }
   if (inflightQuery) {

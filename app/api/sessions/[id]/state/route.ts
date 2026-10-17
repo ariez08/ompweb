@@ -28,6 +28,7 @@ export async function GET(
           return NextResponse.json({
             running: true,
             external: true,
+            webActive: false,
             cliLocked: Boolean(cliLock),
             cliLockPid: cliLock?.pid,
             state: null,
@@ -35,9 +36,9 @@ export async function GET(
         }
         return NextResponse.json({
           running: true,
+          webActive: true,
           cliLocked: Boolean(cliLock),
           cliLockPid: cliLock?.pid,
-          state,
         }, { headers: { ...PROFILE_SCOPED_HEADERS } });
       } catch {
         // RPC unavailable (e.g. the external CLI took over the session) —
@@ -52,6 +53,7 @@ export async function GET(
     return NextResponse.json({
       running: externallyActive,
       external: externallyActive,
+      webActive: false,
       cliLocked: Boolean(cliLock),
       cliLockPid: cliLock?.pid,
       state: null,

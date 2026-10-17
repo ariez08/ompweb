@@ -13,7 +13,7 @@ import { ChatWindow } from "./ChatWindow";
 import { TabBar, type Tab } from "./TabBar";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
-import { Check, CircleCheck, FolderGit2, History, Menu, Moon, PanelLeft, Search, Sun, Terminal, TerminalSquare, Wand2, X } from "lucide-react";
+import { Check, CircleCheck, FolderGit2, GitBranch, History, Menu, Moon, PanelLeft, Search, Sun, Terminal, TerminalSquare, Wand2, X } from "lucide-react";
 import { ThemePicker } from "./ThemePicker";
 import { DesktopUpdateBanner } from "./DesktopUpdateBanner";
 import { OmpSetupWizard } from "./OmpSetupWizard";
@@ -404,6 +404,24 @@ export function AppShell() {
   const handleSessionStatsChange = useCallback((stats: SessionStatsInfo | null) => {
     setSessionStats(stats);
   }, []);
+  const [sessionLockState, setSessionLockState] = useState<{ kind: "cli" | "web" | "idle"; pid?: number | null }>({ kind: "idle" });
+  const [actionBusy, setActionBusy] = useState(false);
+
+  const handleReleaseSession = useCallback(async () => {
+    if (!selectedSession?.id || actionBusy) return;
+    setActionBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(selectedSession.id)}/release`, { method: "POST" });
+      if (res.ok) {
+        setSessionLockState({ kind: "idle" });
+      }
+    } catch (e) {
+      console.error("Release session failed:", e);
+    } finally {
+      setActionBusy(false);
+    }
+  }, [selectedSession?.id, actionBusy]);
+
   const [copiedSessionField, setCopiedSessionField] = useState<SessionCopyField | null>(null);
   const sessionCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleCopySessionField = useCallback((field: SessionCopyField, value: string) => {
@@ -796,6 +814,7 @@ export function AppShell() {
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false) => {
     setNewSessionCwd(null);
+    setSessionLockState({ kind: "idle" });
     setSelectedSession(session);
     setSessionKey((k) => k + 1);
     setSystemPrompt(null);
@@ -851,7 +870,7 @@ export function AppShell() {
 
   const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
     setSelectedSession(null);
-    setNewSessionCwd(cwd);
+    setSessionLockState({ kind: "idle" });
     setInitialSessionRestored(true);
     setSessionKey((k) => k + 1);
     setBranchTree([]);
@@ -977,6 +996,24 @@ export function AppShell() {
     hydrateSelectedSession(newSessionId);
     router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
   }, [router, hydrateSelectedSession]);
+  const handleForkCurrentSession = useCallback(async () => {
+    if (!selectedSession?.id || actionBusy) return;
+    setActionBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(selectedSession.id)}/fork`, { method: "POST" });
+      if (res.ok) {
+        const data = (await res.json()) as { newSessionId?: string };
+        if (data.newSessionId) {
+          handleSessionForked(data.newSessionId);
+          setActiveTopPanel(null);
+        }
+      }
+    } catch (e) {
+      console.error("Fork session failed:", e);
+    } finally {
+      setActionBusy(false);
+    }
+  }, [selectedSession?.id, actionBusy, handleSessionForked]);
 
   const handleInitialRestoreDone = useCallback(() => {
     setInitialSessionRestored(true);
@@ -1487,7 +1524,12 @@ export function AppShell() {
             }
             if (currentSpeedStr) tooltipParts.push(t("appShell.tooltipCurrentSpeed", { value: currentSpeedStr }));
             if (averageSpeedStr) tooltipParts.push(t("appShell.tooltipAverageSpeed", { value: averageSpeedStr }));
-            const tooltip = tooltipParts.join("  |  ");
+            const lockLabel = sessionLockState.kind === "cli"
+              ? `[${t("appShell.lockStatusCli", { pid: String(sessionLockState.pid ?? "") })}]`
+              : sessionLockState.kind === "web"
+              ? `[${t("appShell.lockStatusWeb")}]`
+              : `[${t("appShell.lockStatusReleased")}]`;
+            const tooltip = [lockLabel, ...tooltipParts].join("  |  ");
 
             return (
               <button
@@ -1524,6 +1566,21 @@ export function AppShell() {
                   e.currentTarget.style.color = activeTopPanel === "session" ? "var(--text)" : "var(--text-muted)";
                 }}
               >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: "50%",
+                    background: sessionLockState.kind === "cli"
+                      ? "var(--status-warning)"
+                      : sessionLockState.kind === "web"
+                      ? "var(--status-success)"
+                      : "var(--text-dim)",
+                    flexShrink: 0,
+                    transition: "background-color var(--dur-fast) var(--ease-out-warm)",
+                  }}
+                />
                 {isMobile && (
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" />
@@ -1785,24 +1842,113 @@ export function AppShell() {
                     );
 
                     return (
-                      <div style={{
-                        display: "grid",
-                        gridTemplateColumns: isMobile
-                          ? "1fr"
-                          // Mins must fit inside the popover's 680px max-width
-                          // (3 columns + 2×24px gaps): 240+110+140+48 = 538.
-                          // Larger mins overflow and clip the Messages/Tokens
-                          // values off the right edge.
-                          : "minmax(240px, 1.6fr) minmax(110px, 0.55fr) minmax(140px, 0.65fr)",
-                        gap: isMobile ? 16 : 24,
-                        fontSize: 12,
-                        lineHeight: 1.5,
-                        fontFamily: "var(--font-mono)",
-                      }}>
-                        {sessionInfoSection}
-                        {section(t("appShell.sectionMessages"), messageRows)}
-                        {section(t("appShell.sectionTokens"), [...tokenRows, ...extraTokenRows], "right", true)}
-                      </div>
+                      <>
+                        <div style={{
+                          display: "grid",
+                          gridTemplateColumns: isMobile
+                            ? "1fr"
+                            : "minmax(240px, 1.6fr) minmax(110px, 0.55fr) minmax(140px, 0.65fr)",
+                          gap: isMobile ? 16 : 24,
+                          fontSize: 12,
+                          lineHeight: 1.5,
+                          fontFamily: "var(--font-mono)",
+                        }}>
+                          {sessionInfoSection}
+                          {section(t("appShell.sectionMessages"), messageRows)}
+                          {section(t("appShell.sectionTokens"), [...tokenRows, ...extraTokenRows], "right", true)}
+                        </div>
+                        <div
+                          style={{
+                            marginTop: 14,
+                            paddingTop: 12,
+                            borderTop: "1px solid var(--border)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 12,
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                            <span
+                              style={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: "50%",
+                                background: sessionLockState.kind === "cli"
+                                  ? "var(--status-warning)"
+                                  : sessionLockState.kind === "web"
+                                  ? "var(--status-success)"
+                                  : "var(--text-dim)",
+                                flexShrink: 0,
+                              }}
+                            />
+                            <span style={{ fontSize: 11, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {sessionLockState.kind === "cli"
+                                ? t("appShell.lockStatusCli", { pid: String(sessionLockState.pid ?? "") })
+                                : sessionLockState.kind === "web"
+                                ? t("appShell.lockStatusWeb")
+                                : t("appShell.lockStatusReleased")}
+                            </span>
+                          </div>
+                          <div>
+                            {sessionLockState.kind === "cli" ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleForkCurrentSession()}
+                                disabled={actionBusy}
+                                title={t("appShell.forkSessionTitle")}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  height: 26,
+                                  padding: "0 10px",
+                                  background: "var(--accent-strong)",
+                                  color: "var(--on-accent)",
+                                  border: "none",
+                                  borderRadius: 6,
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  cursor: actionBusy ? "wait" : "pointer",
+                                  transition: "background-color var(--dur-fast) var(--ease-out-warm)",
+                                }}
+                              >
+                                <GitBranch size={12} strokeWidth={2} aria-hidden="true" />
+                                {t("appShell.forkSession")}
+                              </button>
+                            ) : sessionLockState.kind === "web" ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleReleaseSession()}
+                                disabled={actionBusy}
+                                title={t("appShell.releaseSessionTitle")}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  height: 26,
+                                  padding: "0 10px",
+                                  background: "var(--bg)",
+                                  color: "var(--text)",
+                                  border: "1px solid var(--border)",
+                                  borderRadius: 6,
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  cursor: actionBusy ? "wait" : "pointer",
+                                  transition: "background-color var(--dur-fast) var(--ease-out-warm)",
+                                }}
+                              >
+                                <Terminal size={12} strokeWidth={1.8} aria-hidden="true" />
+                                {t("appShell.releaseSession")}
+                              </button>
+                            ) : (
+                              <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                                {t("appShell.sessionReleasedBadge")}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </>
                     );
                   })() : (
                     <div style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
@@ -1845,6 +1991,7 @@ export function AppShell() {
               thinkingDisplayMode={thinkingDisplayMode}
               onOpenPlan={() => selectedSession && handleOpenPlan(selectedSession.id)}
               onSubagentsChange={setSubagents}
+              onSessionLockChange={setSessionLockState}
             />
           ) : initialCwdStatus === "validating" ? (
             <div
