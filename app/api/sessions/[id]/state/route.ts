@@ -19,12 +19,10 @@ export async function GET(
     if (rpc?.isAlive()) {
       try {
         const state = await rpc.send({ type: "get_state" }) as { isPromptRunning?: boolean; isStreaming?: boolean; isBashRunning?: boolean } | undefined;
+        const fileActive = await isExternallyActive(id, 5000, ctx);
         const cliLock = await findCliSessionLock(id);
-        const externallyActive = (Boolean(cliLock) || (await isExternallyActive(id, 5000, ctx)))
-          && !state?.isPromptRunning && !state?.isStreaming && !state?.isBashRunning;
-        if (externallyActive) {
-          // The web-owned omp is idle but the session file keeps changing or
-          // is held by an active terminal CLI — report as externally running.
+        const rpcRunning = Boolean(state?.isPromptRunning || state?.isStreaming || state?.isBashRunning);
+        if (fileActive && !rpcRunning) {
           return NextResponse.json({
             running: true,
             external: true,
@@ -35,10 +33,11 @@ export async function GET(
           }, { headers: { ...PROFILE_SCOPED_HEADERS } });
         }
         return NextResponse.json({
-          running: true,
+          running: rpcRunning,
           webActive: true,
           cliLocked: Boolean(cliLock),
           cliLockPid: cliLock?.pid,
+          state,
         }, { headers: { ...PROFILE_SCOPED_HEADERS } });
       } catch {
         // RPC unavailable (e.g. the external CLI took over the session) —
@@ -49,10 +48,10 @@ export async function GET(
     const resolved = await resolveSessionPathOr404(id, ctx);
     if ("response" in resolved) return resolved.response;
     const cliLock = await findCliSessionLock(id);
-    const externallyActive = Boolean(cliLock) || (await isExternallyActive(id, 5000, ctx));
+    const fileActive = await isExternallyActive(id, 5000, ctx);
     return NextResponse.json({
-      running: externallyActive,
-      external: externallyActive,
+      running: fileActive,
+      external: fileActive,
       webActive: false,
       cliLocked: Boolean(cliLock),
       cliLockPid: cliLock?.pid,

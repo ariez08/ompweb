@@ -7,7 +7,6 @@ import {
   resolveSessionIdByPath,
   resolveSessionPath,
 } from "./session-reader";
-import { findCliSessionLock } from "./session-cli-lock";
 // omp owns the writes to a session's JSONL. ompweb streams RPC events only for
 // the sessions it spawned itself, so a session started outside the web UI — by
 // `omp` in a terminal, or by a harness that launches omp — never updated while
@@ -202,8 +201,6 @@ export async function isExternallyActive(
   withinMs = 5000,
   ctx: ProfileContext = defaultProfileContext(),
 ): Promise<boolean> {
-  const cliLock = await findCliSessionLock(sessionId);
-  if (cliLock) return true;
   const filePath = await resolveSessionPath(sessionId, ctx);
   if (!filePath) return false;
   try {

@@ -62,8 +62,7 @@ export async function GET(req: Request) {
         try {
           const rpcIds = new Set(getRunningRpcSessionIdsFor(ctx));
           const fileActive = getExternallyActiveIds(5000, ctx);
-          const cliLocks = await listCliLockedSessions();
-          const active = [...new Set([...fileActive, ...cliLocks.keys()])].filter((id) => !rpcIds.has(id));
+          const active = fileActive.filter((id) => !rpcIds.has(id));
           if (active.length > 0) {
             encode({ type: "externally-running", externallyRunning: active });
           }
@@ -75,14 +74,12 @@ export async function GET(req: Request) {
       // Initial snapshot so the client renders the correct state immediately.
       const initialRpc = getRunningRpcSessionIdsFor(ctx);
       encode({ type: "running", runningSessionIds: initialRpc });
-      void listCliLockedSessions().then((cliLocks) => {
-        const fileActive = getExternallyActiveIds(5000, ctx);
-        const rpcIds = new Set(initialRpc);
-        const active = [...new Set([...fileActive, ...cliLocks.keys()])].filter((id) => !rpcIds.has(id));
-        if (active.length > 0) {
-          encode({ type: "externally-running", externallyRunning: active });
-        }
-      }).catch(() => {});
+      const fileActive = getExternallyActiveIds(5000, ctx);
+      const rpcIds = new Set(initialRpc);
+      const active = fileActive.filter((id) => !rpcIds.has(id));
+      if (active.length > 0) {
+        encode({ type: "externally-running", externallyRunning: active });
+      }
       // Heartbeat to keep the connection alive through proxies/timeouts.
       const heartbeat = setInterval(() => {
         try {
