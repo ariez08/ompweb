@@ -47,7 +47,7 @@ export async function POST(req: Request) {
     }
 
     // Use a one-time key so startRpcSession's lock doesn't conflict with real session ids
-    const { provider, modelId, toolNames, thinkingLevel, advisor, ...promptCommand } = command as { provider?: string; modelId?: string; toolNames?: string[]; thinkingLevel?: string; advisor?: boolean; [key: string]: unknown };
+    const { provider, modelId, toolNames, skillPatterns, thinkingLevel, advisor, ...promptCommand } = command as { provider?: string; modelId?: string; toolNames?: string[]; skillPatterns?: string[]; thinkingLevel?: string; advisor?: boolean; [key: string]: unknown };
     // A fresh child owns the id it receives from omp. Never forward a stale or
     // forged request id into its first command, where it could target another
     // session after a reconnect.
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     // that share a key onto one session. Date.now() (ms resolution) collides for
     // requests in the same millisecond, merging two new sessions into one.
     const tempKey = `__new__${randomUUID()}`;
-    const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames, advisor === true, undefined, ctx);
+    const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames, advisor === true, undefined, ctx, skillPatterns);
     spawnedSession = session;
 
     // Keep the files-route allowed-roots cache (see app/api/files/[...path]/route.ts)

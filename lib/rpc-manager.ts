@@ -150,14 +150,20 @@ export function mapPresetToolNames(toolNames: string[]): string[] {
 const FULL_PRESET_KEY = [...PRESET_FULL].map((n) => n.toLowerCase()).sort().join(",");
 
 /** Extra CLI args for spawning `omp --mode rpc-ui` for a session. */
-export function buildSessionSpawnArgs(sessionFile: string, toolNames?: string[], advisor = false): string[] {
+export function buildSessionSpawnArgs(
+  sessionFile: string,
+  toolNames?: string[],
+  advisor = false,
+  skillPatterns?: string[],
+): string[] {
   const args: string[] = [];
   if (sessionFile) {
     // An absolute path (or anything containing "/") resolves deterministically:
     // omp's createSessionManager opens it directly via SessionManager.open
     // without any interactive resume/fork prompts (main.ts resume handling).
     args.push("--resume", sessionFile);
-  } else if (toolNames !== undefined) {
+  }
+  if (toolNames !== undefined) {
     const presetKey = toolNames.map((n) => n.toLowerCase()).sort().join(",");
     if (toolNames.length === 0) {
       args.push("--no-tools");
@@ -167,6 +173,13 @@ export function buildSessionSpawnArgs(sessionFile: string, toolNames?: string[],
     } else {
       const mapped = mapPresetToolNames(toolNames);
       if (mapped.length > 0) args.push("--tools", mapped.join(","));
+    }
+  }
+  if (skillPatterns !== undefined) {
+    if (skillPatterns.length === 0) {
+      args.push("--no-skills");
+    } else {
+      args.push("--skills", skillPatterns.join(","));
     }
   }
   if (advisor) args.push("--advisor");
@@ -285,12 +298,25 @@ export class AgentSessionWrapper {
 
   // Plain field assignments (not TS parameter properties) keep this module
   // runnable under Node's strip-only TypeScript mode for probes/tests.
-  constructor(proc: RpcProcessLike, cwd: string, recordedCwd?: string | null, advisorSpawned = false, ctx: ProfileContext = defaultProfileContext()) {
+  toolNames?: string[];
+  skillPatterns?: string[];
+
+  constructor(
+    proc: RpcProcessLike,
+    cwd: string,
+    recordedCwd?: string | null,
+    advisorSpawned = false,
+    ctx: ProfileContext = defaultProfileContext(),
+    toolNames?: string[],
+    skillPatterns?: string[],
+  ) {
     this.proc = proc;
     this.cwd = cwd;
     this.recordedCwd = recordedCwd ?? null;
     this.advisorSpawned = advisorSpawned;
     this.ctx = ctx;
+    this.toolNames = toolNames;
+    this.skillPatterns = skillPatterns;
   }
 
   get sessionId(): string {
@@ -933,7 +959,7 @@ export class AgentSessionWrapper {
         proc = await createRpcProcess({
           cwd: this.cwd,
           sessionId: this.sessionId,
-          extraArgs: buildSessionSpawnArgs(resumable ? sessionFile : ""),
+          extraArgs: buildSessionSpawnArgs(resumable ? sessionFile : "", this.toolNames, this.advisorSpawned, this.skillPatterns),
           onExit: ({ stderrTail }) => {
             if (this.proc === proc) this.handleProcessExit(stderrTail);
           },
@@ -972,6 +998,14 @@ export class AgentSessionWrapper {
     }
     notifyRunningChange();
   }
+  async updateCapabilities(options: { toolNames?: string[]; skillPatterns?: string[] }): Promise<void> {
+    this.toolNames = options.toolNames;
+    this.skillPatterns = options.skillPatterns;
+    if (!this.isRunning()) {
+      await this.restart();
+    }
+  }
+
 
   async send(command: Record<string, unknown>): Promise<unknown> {
     if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
@@ -1453,6 +1487,7 @@ export async function startRpcSession(
    * fallback (recorded dir gone) and warn the user. Omit for new sessions. */
   recordedCwd?: string | null,
   ctx: ProfileContext = defaultProfileContext(),
+  skillPatterns?: string[],
 ): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
   const registry = getRegistry();
   const locks = getLocks();
@@ -1487,7 +1522,7 @@ export async function startRpcSession(
       proc = await createRpcProcess({
         cwd,
         sessionId: sessionId ?? `session-${Math.random().toString(36).slice(2, 10)}`,
-        extraArgs: buildSessionSpawnArgs(sessionFile, toolNames, advisor === true),
+        extraArgs: buildSessionSpawnArgs(sessionFile, toolNames, advisor === true, skillPatterns),
         onExit: ({ stderrTail }) => holder.wrapper?.handleProcessExit(stderrTail),
         ctx,
       });
@@ -1499,7 +1534,7 @@ export async function startRpcSession(
       }
       throw error;
     }
-    const created = new AgentSessionWrapper(proc, cwd, recordedCwd, advisor === true, ctx);
+    const created = new AgentSessionWrapper(proc, cwd, recordedCwd, advisor === true, ctx, toolNames, skillPatterns);
     holder.wrapper = created;
     created.start();
     try {

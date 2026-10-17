@@ -26,6 +26,8 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/lib/i18n";
 import { selectableThinkingLevels } from "@/lib/thinking-levels";
 
+import { CapabilitiesPicker } from "./CapabilitiesPicker";
+import type { SessionCapabilities } from "@/lib/capabilities-types";
 export interface AttachedImage {
   data: string;   // base64, no prefix
   mimeType: string;
@@ -46,6 +48,9 @@ interface Props {
   onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => void;
   isStreaming: boolean;
   cliLockPid?: number | null;
+  capabilities?: SessionCapabilities;
+  onCapabilitiesChange?: (caps: SessionCapabilities, saveToWorkspace?: boolean) => void;
+  sessionId?: string;
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
   modelNames?: Record<string, string>;
@@ -379,7 +384,7 @@ function ComposerModeStatus({ goal, plan, onOpenPlan }: { goal?: ActiveGoal | nu
 }
 
 export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onAbort, onSteer, onFollowUp, isStreaming, cliLockPid, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, fastModeSupported, onFastModeChange,
+  onSend, onAbort, onSteer, onFollowUp, isStreaming, cliLockPid, capabilities, onCapabilitiesChange, sessionId, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, fastModeSupported, onFastModeChange,
   onAbortCompaction, isCompacting, compactResult,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap, modelNameOverride,
   retryInfo, queuedMessages, inputHistory = [], onAbortRetry,
@@ -2542,6 +2547,15 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 </svg>
                 {t("chatInput.fastLabel")}
               </button>
+            )}
+            {capabilities && onCapabilitiesChange && (
+              <CapabilitiesPicker
+                capabilities={capabilities}
+                onCapabilitiesChange={onCapabilitiesChange}
+                disabled={isStreaming}
+                cwd={cwd || undefined}
+                sessionId={sessionId}
+              />
             )}
 
             <div style={{ flex: 1 }} />

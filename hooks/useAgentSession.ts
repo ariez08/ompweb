@@ -26,6 +26,7 @@ import { validateOutgoingPrompt } from "@/lib/image-attachments";
 import { createActiveGoal, parseActiveGoal, type ActiveGoal, type ActivePlan } from "@/lib/web-mode-state";
 import type { HostToolDefinition, HostUriSchemeDefinition, RpcAvailableSlashCommand, SessionStatsInfo, TodoPhase } from "@/lib/pi-types";
 import { isRecord } from "@/lib/type-guards";
+import type { SessionCapabilities } from "@/lib/capabilities-types";
 
 // Stable across renders and HMR: the default transport for every hook instance.
 const defaultHttpClient: OmpwebClient = createHttpSseClient();
@@ -657,6 +658,56 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
   const [toolPreset, setToolPreset] = useState<ToolPreset>(() => getPreferredToolPreset());
+  const [capabilities, setCapabilities] = useState<SessionCapabilities>(() => {
+    const preferred = getPreferredToolPreset();
+    if (preferred === "none") return { preset: "chat_only", tools: [], skills: [] };
+    if (preferred === "default") return { preset: "code_editor", tools: ["read", "edit", "write", "bash", "glob", "grep"] };
+    return { preset: "full_agent" };
+  });
+  const pendingCapabilitiesNoticeRef = useRef<string | null>(null);
+
+  const handleCapabilitiesChange = useCallback(async (newCaps: SessionCapabilities, saveToWorkspace = false) => {
+    setCapabilities(newCaps);
+    if (newCaps.preset === "chat_only") setPreferredToolPreset("none");
+    else if (newCaps.preset === "code_editor") setPreferredToolPreset("default");
+    else if (newCaps.preset === "full_agent") setPreferredToolPreset("full");
+
+    const activeTools = newCaps.tools?.join(", ") ?? "all";
+    const activeSkills = newCaps.skills?.join(", ") ?? "all";
+    const disabledList = newCaps.preset === "chat_only"
+      ? "all tools"
+      : newCaps.preset === "code_editor"
+      ? "task, eval, todo, ask, wait"
+      : "none";
+
+    pendingCapabilitiesNoticeRef.current = translate("capabilities.noticeUpdated", {
+      tools: activeTools,
+      skills: activeSkills,
+      disabledTools: disabledList,
+    });
+
+    if (session?.id) {
+      await fetch(`/api/agent/${encodeURIComponent(session.id)}/capabilities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          toolNames: newCaps.tools,
+          skillPatterns: newCaps.skills,
+        }),
+      }).catch(() => {});
+    }
+
+    if (saveToWorkspace && (session?.cwd || newSessionCwd)) {
+      await fetch("/api/capabilities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cwd: session?.cwd || newSessionCwd,
+          capabilities: newCaps,
+        }),
+      }).catch(() => {});
+    }
+  }, [session?.id, session?.cwd, newSessionCwd, translate]);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("auto");
   const [fastModeEnabled, setFastModeEnabled] = useState(false);
   const [fastModeActive, setFastModeActive] = useState<boolean | undefined>(undefined);
@@ -1270,7 +1321,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const promise = (async () => {
       const selectedModel = newSessionModel ?? newSessionDefaultModel;
       if (selectedModel) setPendingModel(selectedModel);
-      const toolNames = getToolNamesForPreset(toolPreset);
+      const toolNames = capabilities.tools;
+      const skillPatterns = capabilities.skills;
       const res = await fetch("/api/agent/new", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1278,6 +1330,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           cwd: newSessionCwd,
           type: "ensure_session",
           toolNames,
+          skillPatterns,
           ...(selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.modelId } : {}),
           ...(thinkingLevel !== "auto" ? { thinkingLevel } : {}),
           ...(advisorEnabled ? { advisor: true } : {}),
@@ -2611,9 +2664,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         void refreshSubagentRoster(session.id);
         void registerHostTools(session.id);
         void registerHostUriSchemes(session.id);
+        const promptText = pendingCapabilitiesNoticeRef.current
+          ? `${pendingCapabilitiesNoticeRef.current}\n\n${message}`
+          : message;
+        pendingCapabilitiesNoticeRef.current = null;
         await sendAgentCommand(session.id, {
           type: "prompt",
-          message,
+          message: promptText,
           ...(piImages?.length ? { images: piImages } : {}),
         });
       }
@@ -3585,7 +3642,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
-    agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
+    agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, capabilities, handleCapabilitiesChange, thinkingLevel, fastModeEnabled, fastModeActive, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, tokensPerSecond, currentModel, displayModel, isAutoModelSelection: !displayModel, sessionStats, agentPhase,

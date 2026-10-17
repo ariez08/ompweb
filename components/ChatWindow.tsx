@@ -521,7 +521,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
 
   const {
     loading, error, messages, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
-    agentRunning, bashRunning, pendingBash, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, thinkingLevel, fastModeEnabled, fastModeActive,
+    agentRunning, bashRunning, pendingBash, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, capabilities, handleCapabilitiesChange, thinkingLevel, fastModeEnabled, fastModeActive,
     liveModelMeta,
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactResult, tokensPerSecond, displayModel: displayModelValue, sessionStats,
@@ -1083,6 +1083,9 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
       thinkingLevelMap={currentThinkingLevelMap}
       modelNameOverride={liveModelMeta?.name ?? null}
       retryInfo={retryInfo}
+      capabilities={capabilities}
+      onCapabilitiesChange={handleCapabilitiesChange}
+      sessionId={session?.id}
       activeGoal={activeGoal}
       activePlan={activePlan ?? (planInfo?.planModeActive ? { objective: t("chatWindow.planDocument") } : null)}
       onOpenPlan={onOpenPlan}
@@ -1101,7 +1104,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
       onBuiltinCommand={handleBuiltinSlashCommand}
       onAudioUnlock={unlockAudio}
       draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
-      cwd={session?.cwd ?? newSessionCwd}
+      cwd={session?.cwd || newSessionCwd || undefined}
     />
   );
 

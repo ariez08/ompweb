@@ -6,6 +6,7 @@
     "components/AppShell.tsx": 11,
     "components/ArchiveBrowser.tsx": 2,
     "components/BackendDiagnostics.tsx": 12,
+    "components/CapabilitiesPicker.tsx": 1,
     "components/ChatInput.tsx": 4,
     "components/ChatWindow.tsx": 1,
     "components/DirectoryPicker.tsx": 1,
@@ -31,7 +32,7 @@
     "components/panels/RightWorkbench.tsx": 1,
     "components/usage/UsageDashboardModal.tsx": 2,
     "components/usage/UsageTabLogs.tsx": 1,
-    "hooks/useAgentSession.ts": 15,
+    "hooks/useAgentSession.ts": 17,
     "lib/agent-client.ts": 1,
     "lib/client/http-sse-adapter.ts": 3,
     "lib/workbench-client.ts": 3
