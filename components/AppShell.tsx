@@ -831,10 +831,8 @@ export function AppShell() {
     // same-project check in handleCwdChange relies on — hydrate it so the
     // comparison cannot misfire and close the chat we just opened.
     hydrateSelectedSession(session.id);
-    // Skip router.replace when restoring from URL — the param is already correct
-    // and calling replace in production Next.js triggers a Suspense remount loop
     if (!isRestore) {
-      router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
+      router.push(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     }
   }, [router, isMobile, hydrateSelectedSession, armCwdSuppression]);
 
@@ -885,7 +883,7 @@ export function AppShell() {
     setSystemPromptLoading(false);
     setActiveTopPanel(null);
     if (isMobile) setSidebarOpen(false);
-    router.replace("/", { scroll: false });
+    router.push("/", { scroll: false });
   }, [router, isMobile, activeCwd, selectedSession?.cwd, armCwdSuppression]);
 
   // A profile switch orphans whatever the pane was showing: the open session id
@@ -908,6 +906,37 @@ export function AppShell() {
     setActiveTopPanel(null);
     router.replace("/", { scroll: false });
   }, [router]);
+
+  const currentUrlSessionId = searchParams.get("session");
+
+  // Keep selectedSession in sync with browser Back / Forward buttons (popstate)
+  useEffect(() => {
+    if (!initialSessionRestored) return;
+
+    if (currentUrlSessionId) {
+      if (selectedSession?.id !== currentUrlSessionId) {
+        fetch(`/api/sessions/${encodeURIComponent(currentUrlSessionId)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data?.info) {
+              handleSelectSession(data.info, true);
+            }
+          })
+          .catch(() => {});
+      }
+    } else {
+      // URL has no ?session= (e.g. user pressed Back to root '/')
+      if (selectedSession !== null) {
+        setSelectedSession(null);
+        setNewSessionCwd(activeCwd || null);
+        setSessionKey((k) => k + 1);
+        setBranchTree([]);
+        setBranchActiveLeafId(null);
+        setSystemPrompt(null);
+        setActiveTopPanel(null);
+      }
+    }
+  }, [currentUrlSessionId, initialSessionRestored, selectedSession?.id, handleSelectSession, activeCwd]);
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({

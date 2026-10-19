@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveSessionPath } from "./session-reader";
+import { resolveSessionPath, findProfileForSession } from "./session-reader";
 import { PROFILE_SCOPED_HEADERS } from "./omp/profile-cookie";
 import { defaultProfileContext, type ProfileContext } from "./omp/profile-context";
 
@@ -17,6 +17,25 @@ export async function resolveSessionPathOr404(
 ): Promise<{ filePath: string } | { response: NextResponse }> {
   const filePath = await resolveSessionPath(id, ctx);
   if (!filePath) {
+    const targetCtx = await findProfileForSession(id);
+    if (targetCtx && targetCtx.key !== ctx.key) {
+      return {
+        response: NextResponse.json(
+          {
+            error: `Session belongs to profile ${targetCtx.key}`,
+            code: "session_wrong_profile",
+            profile: targetCtx.key,
+          },
+          {
+            status: 404,
+            headers: {
+              ...PROFILE_SCOPED_HEADERS,
+              "x-omp-profile-target": targetCtx.key,
+            },
+          },
+        ),
+      };
+    }
     return {
       response: NextResponse.json(SESSION_NOT_FOUND, { status: 404, headers: { ...PROFILE_SCOPED_HEADERS } }),
     };

@@ -1456,6 +1456,25 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
       // A URL may identify a just-started session whose JSONL has not flushed
       // yet. A stale remembered id is discarded immediately instead.
       if (initialSessionId && restoreRetryRef.current < INITIAL_RESTORE_MAX_ATTEMPTS) {
+        if (restoreRetryRef.current === 0) {
+          void fetch(`/api/sessions/${encodeURIComponent(initialSessionId)}`)
+            .then(async (res) => {
+              if (!res.ok) {
+                const errData = (await res.json().catch(() => null)) as { code?: string; profile?: string } | null;
+                if (errData?.code === "session_wrong_profile" && errData.profile) {
+                  const switchRes = await fetch("/api/profile", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ profile: errData.profile }),
+                  });
+                  if (switchRes.ok) {
+                    window.location.reload();
+                  }
+                }
+              }
+            })
+            .catch(() => {});
+        }
         restoreRetryRef.current += 1;
         if (restoreRetryTimerRef.current) {
           clearTimeout(restoreRetryTimerRef.current);

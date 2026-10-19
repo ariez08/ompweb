@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "fs";
 import { normalize as normalizePath } from "path";
 import { getAgentDir } from "./omp/paths";
-import { defaultProfileContext, type ProfileContext } from "./omp/profile-context";
+import { allProfileContexts, defaultProfileContext, type ProfileContext } from "./omp/profile-context";
 import {
   invalidateSessionFileListCache,
   listAllSessionInfos,
@@ -290,6 +290,17 @@ export async function resolveSessionPath(
     return null;
   }
   return resolved;
+}
+
+export async function findProfileForSession(
+  sessionId: string,
+): Promise<ProfileContext | null> {
+  const all = allProfileContexts();
+  for (const ctx of all) {
+    const resolved = await resolveSessionPath(sessionId, ctx);
+    if (resolved) return ctx;
+  }
+  return null;
 }
 
 export async function resolveSessionIdByPath(
