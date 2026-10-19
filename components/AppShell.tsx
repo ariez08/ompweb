@@ -869,7 +869,13 @@ export function AppShell() {
   }, []);
 
   const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
+    const targetCwd = (cwd && cwd.trim() !== "") ? cwd : (activeCwd || selectedSession?.cwd || null);
     setSelectedSession(null);
+    setNewSessionCwd(targetCwd);
+    if (targetCwd) {
+      setActiveCwd(targetCwd);
+      armCwdSuppression(targetCwd);
+    }
     setSessionLockState({ kind: "idle" });
     setInitialSessionRestored(true);
     setSessionKey((k) => k + 1);
@@ -880,7 +886,7 @@ export function AppShell() {
     setActiveTopPanel(null);
     if (isMobile) setSidebarOpen(false);
     router.replace("/", { scroll: false });
-  }, [router, isMobile]);
+  }, [router, isMobile, activeCwd, selectedSession?.cwd, armCwdSuppression]);
 
   // A profile switch orphans whatever the pane was showing: the open session id
   // belongs to the previous profile's store, so resolving it against the new
@@ -1175,7 +1181,7 @@ export function AppShell() {
         onInitialRestoreDone={handleInitialRestoreDone}
         refreshKey={refreshKey}
         onSessionDeleted={handleSessionDeleted}
-        selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
+        selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? activeCwd ?? null}
         onCwdChange={handleCwdChange}
         onOpenFile={handleOpenFile}
         explorerRefreshKey={explorerRefreshKey}
