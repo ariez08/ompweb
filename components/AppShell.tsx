@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -706,6 +706,10 @@ export function AppShell() {
   // The boot gate stays closed until the sidebar has either restored a URL /
   // remembered session or conclusively found no session to restore.
   const [initialSessionRestored, setInitialSessionRestored] = useState(false);
+  // Session list snapshot used only to resolve fork lineage (parent link and
+  // child forks) inside the BranchNavigator panel. Sessions carry
+  // `parentSessionId`, so one flat list is enough for both directions.
+  const [sessionCatalog, setSessionCatalog] = useState<SessionInfo[]>([]);
   // The sidebar updates selectedCwd before invoking onSelectSession. Keep the
   // expected project as a token rather than a boolean: rapid clicks can emit
   // a stale cwd event first, and consuming a boolean there used to clear the
@@ -835,6 +839,42 @@ export function AppShell() {
       router.push(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     }
   }, [router, isMobile, hydrateSelectedSession, armCwdSuppression]);
+
+  // Fork lineage: one flat list carries both directions (a session knows its
+  // `parentSessionId`, so children are a filter). Refetches whenever the
+  // sidebar list is invalidated so a fresh fork appears immediately.
+  useEffect(() => {
+    if (!initialSessionRestored) return;
+    let cancelled = false;
+    void fetch("/api/sessions")
+      .then((r) => (r.ok ? (r.json() as Promise<{ sessions?: SessionInfo[] }>) : null))
+      .then((d) => {
+        if (!cancelled && d?.sessions) setSessionCatalog(d.sessions);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [initialSessionRestored, refreshKey, selectedSession?.id]);
+
+  const forkLineage = useMemo(() => {
+    const currentId = selectedSession?.id;
+    if (!currentId) return { parent: null, children: [] as SessionInfo[] };
+    const parentId = selectedSession?.parentSessionId;
+    return {
+      parent: parentId ? sessionCatalog.find((s) => s.id === parentId) ?? null : null,
+      children: sessionCatalog.filter((s) => s.parentSessionId === currentId),
+    };
+  }, [selectedSession?.id, selectedSession?.parentSessionId, sessionCatalog]);
+
+  // Jump between fork lineage rows. The catalog already holds the full
+  // SessionInfo (cwd/projectRoot), so no extra fetch is needed before the
+  // normal selection path runs.
+  const handleOpenSessionById = useCallback((sessionId: string) => {
+    const target = sessionCatalog.find((s) => s.id === sessionId);
+    if (!target) return;
+    setActiveTopPanel(null);
+    handleSelectSession(target);
+  }, [sessionCatalog, handleSelectSession]);
+
 
   const [usageDashboardOpen, setUsageDashboardOpen] = useState(false);
   const [usageDashboardTab, setUsageDashboardTab] = useState<"limits" | "models" | "projects" | "logs">("limits");
@@ -1503,6 +1543,15 @@ export function AppShell() {
                 hasSession={Boolean(selectedSession)}
                 onForkSession={handleForkCurrentSession}
                 forkDisabled={actionBusy}
+                parentSession={forkLineage.parent ? {
+                  id: forkLineage.parent.id,
+                  label: forkLineage.parent.name || forkLineage.parent.firstMessage || forkLineage.parent.id,
+                } : null}
+                childForks={forkLineage.children.map((s) => ({
+                  id: s.id,
+                  label: s.name || s.firstMessage || s.id,
+                }))}
+                onOpenSession={handleOpenSessionById}
               />
               <button
                 ref={systemBtnRef}

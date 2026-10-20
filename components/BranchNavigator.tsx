@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, memo, useRef, useEffect } from "react";
-import { GitBranch } from "lucide-react";
+import { GitBranch, GitFork, CornerUpLeft } from "lucide-react";
 import { translate, useI18n } from "@/lib/i18n";
 import type { BranchPreview, SessionEntry, SessionTreeNode } from "@/lib/types";
 
@@ -23,6 +23,12 @@ interface Props {
   onForkSession?: () => void;
   /** True while fork action is in flight */
   forkDisabled?: boolean;
+  /** Session this one was forked from (file-level lineage), if any */
+  parentSession?: { id: string; label: string } | null;
+  /** Sessions forked from this one (file-level lineage) */
+  childForks?: Array<{ id: string; label: string }>;
+  /** Navigate to another session by id (used by the lineage rows) */
+  onOpenSession?: (sessionId: string) => void;
 }
 
 // Find the visible entry IDs on the path from root to activeLeafId.
@@ -258,7 +264,73 @@ const TreeNodeView = memo(function TreeNodeView({ node, activePathIds, depth, is
   return true;
 });
 
-export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession, onForkSession, forkDisabled }: Props) {
+/** File-level fork lineage: the session this one came from, and the sessions
+ *  forked from it. Distinct from the turn-level tree rendered below it, which
+ *  only knows about entries inside a single .jsonl file. */
+function ForkLineageSection({ parentSession, childForks, onOpenSession }: {
+  parentSession?: { id: string; label: string } | null;
+  childForks?: Array<{ id: string; label: string }>;
+  onOpenSession?: (sessionId: string) => void;
+}) {
+  const { t } = useI18n();
+  const hasParent = Boolean(parentSession);
+  const hasChildren = Boolean(childForks && childForks.length > 0);
+  if (!hasParent && !hasChildren) return null;
+
+  const rowStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    width: "100%",
+    padding: "4px 6px",
+    borderRadius: 6,
+    border: "none",
+    background: "none",
+    color: "var(--text-muted)",
+    fontSize: 11.5,
+    textAlign: "left",
+    cursor: "pointer",
+    overflow: "hidden",
+  };
+
+  return (
+    <div style={{ borderBottom: "1px solid var(--border)", padding: "6px 12px 8px" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-dim)", letterSpacing: "0.04em", textTransform: "uppercase", fontFamily: "var(--font-mono)", marginBottom: 4 }}>
+        {t("branchNavigator.forkLineage")}
+      </div>
+      {parentSession && (
+        <button
+          type="button"
+          onClick={() => onOpenSession?.(parentSession.id)}
+          title={parentSession.label}
+          style={rowStyle}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
+        >
+          <CornerUpLeft size={12} aria-hidden="true" style={{ flexShrink: 0, color: "var(--accent)" }} />
+          <span style={{ flexShrink: 0, color: "var(--text-dim)" }}>{t("branchNavigator.forkedFrom")}</span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{parentSession.label}</span>
+        </button>
+      )}
+      {childForks?.map((fork) => (
+        <button
+          key={fork.id}
+          type="button"
+          onClick={() => onOpenSession?.(fork.id)}
+          title={fork.label}
+          style={rowStyle}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
+        >
+          <GitFork size={12} aria-hidden="true" style={{ flexShrink: 0, color: "var(--accent)" }} />
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fork.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession, onForkSession, forkDisabled, parentSession, childForks, onOpenSession }: Props) {
   const { t } = useI18n();
   const [openInternal, setOpenInternal] = useState(false);
   const open = openProp !== undefined ? openProp : openInternal;
@@ -330,7 +402,9 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
   const noBranchReason = useMemo(() => !hasSession
     ? t("branchNavigator.noActiveSession")
     : !hasBranch(tree)
-      ? t("branchNavigator.noBranches")
+      // A session with entries but no alternate turns is a linear thread, not a
+      // broken/empty one. Saying "no branches" reads as if forking failed.
+      ? (tree.length > 0 ? t("branchNavigator.linearThread") : t("branchNavigator.noBranches"))
       : null, [hasSession, tree, t]);
 
   // Find first meaningful node (skip pure linear prefix)
@@ -343,9 +417,12 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
     return firstNode && firstNode.children.length > 1 ? firstNode.children : [];
   }, [firstNode, tree]);
   const hasContent = !noBranchReason && topLevelBranches.length > 0;
+  // The toolbar icon should hint at fork lineage too: a freshly forked session
+  // has no turn-level branches yet, but it does have a parent/children.
+  const hasLineage = Boolean(parentSession) || Boolean(childForks && childForks.length > 0);
 
   const branchIcon = (
-    <GitBranch size={16} strokeWidth={1.8} aria-hidden="true" style={{ color: hasContent ? "var(--accent)" : undefined, flexShrink: 0 }} />
+    <GitBranch size={16} strokeWidth={1.8} aria-hidden="true" style={{ color: hasContent || hasLineage ? "var(--accent)" : undefined, flexShrink: 0 }} />
   );
 
   const chevron = (
@@ -383,6 +460,7 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
             overflowY: "auto",
             zIndex: 600,
           }}>
+            <ForkLineageSection parentSession={parentSession} childForks={childForks} onOpenSession={onOpenSession} />
             {hasContent ? (
               <div style={{ padding: "4px 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
                 {topLevelBranches.map((child, idx) => (
@@ -494,6 +572,7 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
           boxShadow: "var(--shadow-pop)",
           zIndex: 100,
         }}>
+          <ForkLineageSection parentSession={parentSession} childForks={childForks} onOpenSession={onOpenSession} />
           {hasContent ? (
             <div style={{ padding: "4px 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
               {topLevelBranches.map((child, idx) => (
