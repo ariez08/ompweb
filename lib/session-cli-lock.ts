@@ -16,9 +16,6 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readdirSync, statSync } from "node:fs";
-import path from "node:path";
-import { resolveProfileContext } from "./omp/profile-context";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,79 +33,16 @@ let inflightQuery: Promise<Map<string, CliLockInfo>> | null = null;
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
-function resolveSessionFromCliProcess(
-  cl: string,
-  procCreatedMs?: number,
-): string | null {
+/**
+ * Session id held by a matched CLI process, taken ONLY from an explicit UUID in
+ * its command line (`--resume <id|path>`). An earlier version also guessed by
+ * taking the newest .jsonl in the process's profile/cwd; that guess routinely
+ * attributed unrelated sessions (and the ompweb server itself) as "CLI-locked",
+ * so it is gone: a real terminal session always carries its id in the args.
+ */
+function resolveSessionFromCliProcess(cl: string): string | null {
   const directMatch = UUID_RE.exec(cl);
-  if (directMatch) return directMatch[0].toLowerCase();
-
-  // Extract profile
-  const mProf = /--profile[=\s]+(?:"([^"]+)"|([^\s]+))/i.exec(cl);
-  const profile = mProf ? (mProf[1] || mProf[2]) : "default";
-
-  // Extract cwd
-  const mCwd = /--cwd[=\s]+(?:"([^"]+)"|([^\s]+))/i.exec(cl);
-  const cwd = mCwd ? (mCwd[1] || mCwd[2]) : null;
-
-  try {
-    const ctx = resolveProfileContext(profile);
-    const baseDir = ctx.sessionsDir;
-
-    let targetDir = baseDir;
-    if (cwd) {
-      // Slugify cwd: e.g. C:\CodeAgent -> --C--CodeAgent--
-      const slug = "--" + cwd.replace(/^[/\\]+/, "").replace(/[:/\\]+/g, "-") + "--";
-      const candidate = path.join(baseDir, slug);
-      try {
-        if (statSync(candidate).isDirectory()) {
-          targetDir = candidate;
-        }
-      } catch {
-        // Fall back to scanning baseDir
-      }
-    }
-
-    let latestFile: string | null = null;
-    let latestTime = 0;
-
-    const scan = (dir: string, depth = 0) => {
-      try {
-        const entries = readdirSync(dir);
-        for (const e of entries) {
-          const full = path.join(dir, e);
-          try {
-            const st = statSync(full);
-            if (st.isDirectory()) {
-              if (depth === 0 && targetDir === baseDir) scan(full, depth + 1);
-            } else if (e.endsWith(".jsonl")) {
-              if (st.mtimeMs > latestTime) {
-                latestTime = st.mtimeMs;
-                latestFile = e;
-              }
-            }
-          } catch {
-            // Ignore stat errors
-          }
-        }
-      } catch {
-        // Ignore read errors
-      }
-    };
-    scan(targetDir);
-
-    if (latestFile) {
-      // Only attribute if file was active during/near the process lifetime (if known)
-      if (procCreatedMs && latestTime < procCreatedMs - 60_000) {
-        return null;
-      }
-      const m = UUID_RE.exec(latestFile);
-      if (m) return m[0].toLowerCase();
-    }
-  } catch {
-    // Ignore resolution errors
-  }
-  return null;
+  return directMatch ? directMatch[0].toLowerCase() : null;
 }
 
 async function queryLockedSessionsWin32(): Promise<Map<string, CliLockInfo>> {
@@ -124,7 +58,7 @@ async function queryLockedSessionsWin32(): Promise<Map<string, CliLockInfo>> {
     "  $_.CommandLine -notmatch '--mode rpc-ui' -and " +
     "  $_.CommandLine -notmatch '__omp_worker_' " +
     "} | " +
-    "Select-Object ProcessId,Name,CommandLine,CreationDate | ConvertTo-Json -Compress";
+    "Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Compress";
 
   try {
     const { stdout } = await execFileAsync("powershell", ["-NoProfile", "-Command", psCmd], {
@@ -134,19 +68,14 @@ async function queryLockedSessionsWin32(): Promise<Map<string, CliLockInfo>> {
     const trimmed = stdout.trim();
     if (!trimmed) return map;
     const parsed = JSON.parse(trimmed) as
-      | { ProcessId?: number; Name?: string; CommandLine?: string; CreationDate?: string }
-      | Array<{ ProcessId?: number; Name?: string; CommandLine?: string; CreationDate?: string }>;
+      | { ProcessId?: number; Name?: string; CommandLine?: string }
+      | Array<{ ProcessId?: number; Name?: string; CommandLine?: string }>;
     const list = Array.isArray(parsed) ? parsed : [parsed];
     for (const p of list) {
       const pid = Number(p.ProcessId);
       if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
       const cl = String(p.CommandLine ?? "");
-      let createdMs: number | undefined;
-      if (typeof p.CreationDate === "string") {
-        const m = /\/Date\((\d+)\)\//.exec(p.CreationDate);
-        if (m) createdMs = Number(m[1]);
-      }
-      const sid = resolveSessionFromCliProcess(cl, createdMs);
+      const sid = resolveSessionFromCliProcess(cl);
       if (!sid) continue;
       if (!map.has(sid)) {
         map.set(sid, {
