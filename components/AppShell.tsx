@@ -948,10 +948,17 @@ export function AppShell() {
   }, [router]);
 
   const currentUrlSessionId = searchParams.get("session");
+  // Last URL value this effect already reconciled. Without it, a render that
+  // lands between `setSelectedSession(...)` and the router committing the new
+  // `?session=`, or any re-render while the URL lags, is read as "user went back
+  // to root" and wipes the chat that was just opened.
+  const syncedUrlSessionRef = useRef<string | null>(currentUrlSessionId);
 
   // Keep selectedSession in sync with browser Back / Forward buttons (popstate)
   useEffect(() => {
     if (!initialSessionRestored) return;
+    if (syncedUrlSessionRef.current === currentUrlSessionId) return;
+    syncedUrlSessionRef.current = currentUrlSessionId;
 
     if (currentUrlSessionId) {
       if (selectedSession?.id !== currentUrlSessionId) {
@@ -964,17 +971,15 @@ export function AppShell() {
           })
           .catch(() => {});
       }
-    } else {
+    } else if (selectedSession !== null) {
       // URL has no ?session= (e.g. user pressed Back to root '/')
-      if (selectedSession !== null) {
-        setSelectedSession(null);
-        setNewSessionCwd(activeCwd || null);
-        setSessionKey((k) => k + 1);
-        setBranchTree([]);
-        setBranchActiveLeafId(null);
-        setSystemPrompt(null);
-        setActiveTopPanel(null);
-      }
+      setSelectedSession(null);
+      setNewSessionCwd(activeCwd || null);
+      setSessionKey((k) => k + 1);
+      setBranchTree([]);
+      setBranchActiveLeafId(null);
+      setSystemPrompt(null);
+      setActiveTopPanel(null);
     }
   }, [currentUrlSessionId, initialSessionRestored, selectedSession?.id, handleSelectSession, activeCwd]);
 
