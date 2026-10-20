@@ -4,7 +4,7 @@
 |---|---|
 | **Target Branch** | `feat/branch-lineage-fork-navigator` |
 | **Baseline** | OmpWeb `5.2.0` (`custom/stable-prod` @ `2c759af`) |
-| **Status** | **Planned (Tersimpan dalam Plan)** |
+| **Status** | **Selesai & terverifikasi live (`92ad8bc` di `custom/stable-prod`, v5.2.0 port 30177)** |
 | **Scope** | Menyatukan konsep *Session Fork* (file-level) dan *In-Session Tree* (turn-level) ke dalam panel navigasi `BranchNavigator` di toolbar atas agar silsilah cabang transparan dan dapat dinavigasi bolak-balik. |
 
 ---
