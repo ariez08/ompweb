@@ -116,7 +116,11 @@ async function queryLockedSessionsWin32(): Promise<Map<string, CliLockInfo>> {
   const psCmd =
     "Get-CimInstance Win32_Process -Filter \"Name like '%bun%' or Name like '%node%' or Name like '%omp%'\" | " +
     "Where-Object { " +
-    "  ($_.CommandLine -match '(@oh-my-pi|pi-coding-agent|dist[\\\\/]cli\\.js|\\bomp(\\.exe)?\\b)') -and " +
+    // Only real interactive CLI entrypoints. `\\bomp(\\.exe)?\\b` used to also
+    // match this server's own `node .../omp-web.js` process, which then
+    // "locked" whatever session was newest in the default profile.
+    "  ($_.CommandLine -match 'omp\\.exe' -or $_.CommandLine -match 'pi-coding-agent[\\\\/]dist[\\\\/]cli\\.js') -and " +
+    "  $_.CommandLine -notmatch 'omp-web\\.js' -and " +
     "  $_.CommandLine -notmatch '--mode rpc-ui' -and " +
     "  $_.CommandLine -notmatch '__omp_worker_' " +
     "} | " +
@@ -169,7 +173,11 @@ async function queryLockedSessionsUnix(): Promise<Map<string, CliLockInfo>> {
     for (const line of stdout.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.includes("--mode rpc-ui") || trimmed.includes("__omp_worker_")) continue;
-      if (!/(@oh-my-pi|pi-coding-agent|dist\/cli\.js|\bomp\b)/.test(trimmed)) continue;
+      // Keep parity with the Win32 matcher: `\bomp\b` also matches this
+      // server's own `omp-web.js` process, which then claims the newest
+      // session in the default profile as "CLI-locked".
+      if (trimmed.includes("omp-web")) continue;
+      if (!/(omp\.exe|pi-coding-agent\/dist\/cli\.js)/.test(trimmed)) continue;
       const match = trimmed.match(/^(\d+)\s+(.+)$/);
       if (!match) continue;
       const pid = Number(match[1]);
