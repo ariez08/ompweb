@@ -2363,6 +2363,9 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
           <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, fontWeight: 500 }}>
             {t("chatInput.settings")}
           </span>
+          <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--text-dim)", opacity: 0.7, marginRight: 2 }}>
+            v5.2.0
+          </span>
           <ChevronRight size={13} strokeWidth={2} style={{ flexShrink: 0, color: "var(--text-dim)" }} aria-hidden="true" />
         </button>
         {onOpenRemote && (
