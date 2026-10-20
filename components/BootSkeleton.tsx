@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 import {
   BOOT_SKELETON_READY_EVENT,
   type BootSkeletonDismissOptions,
@@ -14,6 +15,7 @@ import {
  * native DOM call, because the root layout may still reconcile around it.
  */
 export function BootSkeleton() {
+  const { t } = useI18n();
   const [visible, setVisible] = useState(true);
   const [fading, setFading] = useState(false);
   const removeTimerRef = useRef<number | null>(null);
@@ -84,7 +86,7 @@ export function BootSkeleton() {
       <div style={{ width: 180, height: 3, borderRadius: 2, background: "var(--border, #e8e4dc)", overflow: "hidden" }}>
         <i style={{ display: "block", width: "40%", height: "100%", borderRadius: 2, background: "var(--accent, #c98a1b)", margin: "0 auto", animation: "slide 1.1s ease-in-out infinite" }} />
       </div>
-      <div style={{ fontSize: 12, color: "var(--text-muted, #8a867e)" }}>正在启动…</div>
+      <div style={{ fontSize: 12, color: "var(--text-muted, #8a867e)" }}>{t("boot.starting") || "Starting up…"}</div>
     </div>
   );
 }

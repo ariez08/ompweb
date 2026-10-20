@@ -285,7 +285,9 @@ const DOMAIN_INFO: Record<string, { labelZh: string; labelEn: string; descZh: st
   remote: { labelZh: "远程接入", labelEn: "Remote", descZh: "移动端与跨设备安全访问配对运行时", descEn: "Device pairing & remote gateway" },
 };
 
-function RevealButton({ path, label = "在访达中显示" }: { path?: string | null; label?: string }) {
+function RevealButton({ path, label }: { path?: string | null; label?: string }) {
+  const { t } = useI18n();
+  const displayLabel = label ?? t("reveal.showInFileManager");
   const [busy, setBusy] = useState(false);
   if (!path) return null;
 
@@ -299,12 +301,12 @@ function RevealButton({ path, label = "在访达中显示" }: { path?: string | 
       });
       const data = (await res.json()) as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) {
-        toast.error(data.error ?? "定位失败");
+        toast.error(data.error ?? t("reveal.failed"));
       } else {
-        toast.success("已在系统文件管理器中打开");
+        toast.success(t("reveal.opened"));
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "定位失败");
+      toast.error(e instanceof Error ? e.message : t("reveal.failed"));
     } finally {
       setBusy(false);
     }
@@ -315,8 +317,8 @@ function RevealButton({ path, label = "在访达中显示" }: { path?: string | 
       type="button"
       onClick={handleReveal}
       disabled={busy}
-      title={label}
-      aria-label={label}
+      title={displayLabel}
+      aria-label={displayLabel}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -335,7 +337,7 @@ function RevealButton({ path, label = "在访达中显示" }: { path?: string | 
       }}
     >
       <FolderOpen size={11} aria-hidden="true" />
-      <span>{busy ? "定位中…" : label}</span>
+      <span>{busy ? t("reveal.locating") : displayLabel}</span>
     </button>
   );
 }
@@ -487,12 +489,12 @@ function BackendDiagnosticsPopoverView() {
             const proxyMissing = !diag.proxy.effective && diag.proxy.config.mode === "auto";
             const missingOmp = !diag.omp.installed;
             const issues = [
-              missingOmp ? { key: "omp", title: "OMP 未安装", detail: "安装 omp 后再重试。", action: undefined } : null,
-              hostDown || hostCrash ? { key: "host", title: "Rust host 不可用", detail: "清理孤儿 host 并重新探测，不会重启正在运行的会话。", action: <ActionButton onClick={() => void repairHost()} disabled={actionBusy} icon={<Activity size={11} />} label={t("diagnostics.repair")} /> } : null,
-              orphan ? { key: "orphan", title: "发现孤儿 host", detail: "孤儿进程可能占用锁或 PTY。", action: <ActionButton onClick={() => void repairHost()} disabled={actionBusy} icon={<Activity size={11} />} label={t("diagnostics.repair")} /> } : null,
-              rpcFailed ? { key: "rpc", title: "RPC 会话失败", detail: `${diag.rpc.recentFailures?.length ?? 0} 次最近失败；重启只影响活动 RPC 会话。`, action: <ActionButton onClick={() => void restartRpc()} disabled={restarting || actionBusy} icon={<RotateCcw size={11} />} label={t("diagnostics.restartRpc")} tone="quiet" /> } : null,
-              backendErrors.length > 0 && !hostCrash ? { key: "errors", title: "后端错误记录", detail: `${backendErrors.length} 条错误仍在错误环中。`, action: <ActionButton onClick={() => void clearErrors()} disabled={actionBusy} icon={<Eraser size={11} />} label={t("diagnostics.clearErrors")} tone="quiet" /> } : null,
-              proxyMissing ? { key: "proxy", title: "代理未生效", detail: "当前为自动代理模式，但没有可用端点；请检查代理客户端或改为手动配置。", action: <ActionButton onClick={() => refreshDetails()} disabled={refreshing} icon={<RefreshCw size={11} />} label={t("diagnostics.refresh")} tone="quiet" /> } : null,
+              missingOmp ? { key: "omp", title: t("diagnostics.issueOmpTitle"), detail: t("diagnostics.issueOmpDetail"), action: undefined } : null,
+              hostDown || hostCrash ? { key: "host", title: t("diagnostics.issueHostTitle"), detail: t("diagnostics.issueHostDetail"), action: <ActionButton onClick={() => void repairHost()} disabled={actionBusy} icon={<Activity size={11} />} label={t("diagnostics.repair")} /> } : null,
+              orphan ? { key: "orphan", title: t("diagnostics.issueOrphanTitle"), detail: t("diagnostics.issueOrphanDetail"), action: <ActionButton onClick={() => void repairHost()} disabled={actionBusy} icon={<Activity size={11} />} label={t("diagnostics.repair")} /> } : null,
+              rpcFailed ? { key: "rpc", title: t("diagnostics.issueRpcTitle"), detail: t("diagnostics.issueRpcDetail", { count: diag.rpc.recentFailures?.length ?? 0 }), action: <ActionButton onClick={() => void restartRpc()} disabled={restarting || actionBusy} icon={<RotateCcw size={11} />} label={t("diagnostics.restartRpc")} tone="quiet" /> } : null,
+              backendErrors.length > 0 && !hostCrash ? { key: "errors", title: t("diagnostics.issueErrorsTitle"), detail: t("diagnostics.issueErrorsDetail", { count: backendErrors.length }), action: <ActionButton onClick={() => void clearErrors()} disabled={actionBusy} icon={<Eraser size={11} />} label={t("diagnostics.clearErrors")} tone="quiet" /> } : null,
+              proxyMissing ? { key: "proxy", title: t("diagnostics.issueProxyTitle"), detail: t("diagnostics.issueProxyDetail"), action: <ActionButton onClick={() => refreshDetails()} disabled={refreshing} icon={<RefreshCw size={11} />} label={t("diagnostics.refresh")} tone="quiet" /> } : null,
             ].filter(Boolean) as Array<{ key: string; title: string; detail: string; action?: ReactNode }>;
             if (!issues.length) return null;
             return <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "4px", border: "1px solid color-mix(in srgb, var(--status-warning) 40%, var(--border))", borderRadius: "var(--radius-control)", background: "color-mix(in srgb, var(--status-warning) 5%, var(--bg))" }}><span style={{ fontSize: 10, fontWeight: 700, color: "var(--status-warning)", textTransform: "uppercase" }}>Recovery queue</span>{issues.map((issue) => <div key={issue.key} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 8, alignItems: "center", padding: "5px 2px" }}><div><div style={{ fontSize: 11, fontWeight: 650, color: "var(--text)" }}>{issue.title}</div><div style={{ fontSize: 10, color: "var(--text-muted)", lineHeight: 1.35 }}>{issue.detail}</div></div>{issue.action}</div>)}</div>;
@@ -674,7 +676,7 @@ function BackendDiagnosticsFullView() {
       if (!res.ok || !(data.success ?? data.ok)) {
         const msg = data.error ?? "restart failed";
         setError(msg);
-        toast.error("重启失败", msg);
+        toast.error(t("diagnostics.restartFailed"), msg);
       } else {
         markManualFix();
         setSuccess(t("diagnostics.restartSuccess"));
@@ -686,7 +688,7 @@ function BackendDiagnosticsFullView() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
-      toast.error("重启失败", msg);
+      toast.error(t("diagnostics.restartFailed"), msg);
     } finally {
       setRestarting(false);
     }
@@ -703,7 +705,7 @@ function BackendDiagnosticsFullView() {
       });
       if (!res.ok) {
         setError("clear failed");
-        toast.error("清除错误失败");
+        toast.error(t("diagnostics.clearErrorsFailed"));
       } else {
         setSuccess(t("diagnostics.errorsCleared"));
         toast.success(t("diagnostics.errorsCleared"));
@@ -712,7 +714,7 @@ function BackendDiagnosticsFullView() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
-      toast.error("清除错误失败", msg);
+      toast.error(t("diagnostics.clearErrorsFailed"), msg);
     } finally {
       setActionBusy(false);
     }
@@ -732,7 +734,7 @@ function BackendDiagnosticsFullView() {
       if (!res.ok || !(data.success ?? data.ok)) {
         const msg = data.error ?? "repair failed";
         setError(msg);
-        toast.error("自愈修复失败", msg);
+        toast.error(t("diagnostics.repairFailed"), msg);
       } else {
         markManualFix();
         setSuccess(t("diagnostics.repairSuccess"));
@@ -743,7 +745,7 @@ function BackendDiagnosticsFullView() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
-      toast.error("自愈修复失败", msg);
+      toast.error(t("diagnostics.repairFailed"), msg);
     } finally {
       setActionBusy(false);
     }
@@ -752,7 +754,7 @@ function BackendDiagnosticsFullView() {
   const copyReport = useCallback(() => {
     if (!diag) return;
     const backendErrors = diag.backendErrors ?? [];
-    const lines = [
+    const lines = isZh ? [
       `=== ompweb 系统诊断报告 (${new Date().toISOString()}) ===`,
       `整体健康: ${healthOf(diag)}`,
       `OMP 引擎: ${diag.omp.installed ? `${diag.omp.version ?? "?"} (${diag.omp.path ?? ""})` : "未安装"}`,
@@ -763,6 +765,17 @@ function BackendDiagnosticsFullView() {
       `Web 端口: ${diag.web.url}`,
       `9 域权威: ${Object.entries(diag.backendOwnership ?? {}).map(([d, a]) => `${d}=${a}`).join(", ")}`,
       ...(backendErrors.length ? [`--- 后端异常记录 (${backendErrors.length} 条) ---`, ...backendErrors.map((e) => `[${new Date(e.at).toLocaleTimeString()}] [${e.kind}] ${e.detail}`)] : []),
+    ] : [
+      `=== ompweb Diagnostics Report (${new Date().toISOString()}) ===`,
+      `Overall health: ${healthOf(diag)}`,
+      `OMP engine: ${diag.omp.installed ? `${diag.omp.version ?? "?"} (${diag.omp.path ?? ""})` : "not installed"}`,
+      `Rust Host: ${diag.rustHost ? `${diag.rustHost.mode} (available: ${diag.rustHost.available}) ${diag.rustHost.path}` : "not ready"}`,
+      `Network proxy: ${diag.proxy.effective ?? "direct (disabled)"} (mode: ${diag.proxy.config.mode})`,
+      `Sessions: ${diag.rpc.activeSessions} active, ${diag.rpc.recentFailures?.length ?? 0} recent failures, ${diag.rpc.orphanRustHosts ?? 0} orphan hosts`,
+      `Environment: ${diag.server.platform}/${diag.server.arch} (Node ${diag.server.node}, uptime: ${diag.server.uptimeSeconds}s)`,
+      `Web port: ${diag.web.url}`,
+      `9-domain authority: ${Object.entries(diag.backendOwnership ?? {}).map(([d, a]) => `${d}=${a}`).join(", ")}`,
+      ...(backendErrors.length ? [`--- Backend errors (${backendErrors.length}) ---`, ...backendErrors.map((e) => `[${new Date(e.at).toLocaleTimeString()}] [${e.kind}] ${e.detail}`)] : []),
     ];
     void navigator.clipboard.writeText(lines.join("\n")).then(() => {
       toast.success(t("diagnostics.reportCopied"));
@@ -781,13 +794,13 @@ function BackendDiagnosticsFullView() {
       });
       const data = (await res.json()) as { success?: boolean; error?: string };
       if (data && !data.success && data.error) {
-        toast.error("清理冲突实例失败", data.error);
+        toast.error(t("diagnostics.stopInstanceFailed"), data.error);
       } else {
         toast.success(t("diagnostics.instanceStopped"));
         window.setTimeout(() => refreshDetails(), 500);
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "清理失败");
+      toast.error(e instanceof Error ? e.message : t("diagnostics.stopFailed"));
     } finally {
       setActionBusy(false);
     }
@@ -844,10 +857,10 @@ function BackendDiagnosticsFullView() {
                 {health === null
                   ? t("diagnostics.refreshing")
                   : health === "ok"
-                    ? (isZh ? "所有服务运行正常 (All Systems Operational)" : "All Systems Operational")
+                    ? t("diagnostics.allOperational")
                     : health === "warn"
-                      ? (isZh ? "系统运行有警告 (Needs Attention)" : "System Warning")
-                      : (isZh ? "后端服务异常 (Critical Error)" : "Critical Backend Failure")}
+                      ? t("diagnostics.needsAttention")
+                      : t("diagnostics.criticalFailure")}
               </span>
               <span
                 style={{
@@ -866,11 +879,11 @@ function BackendDiagnosticsFullView() {
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                 <Clock size={12} aria-hidden="true" />
-                {isZh ? "自动轮询: 每 30 秒" : "Polling: every 30s"}
+                {t("diagnostics.pollingEvery30s")}
               </span>
               <span>·</span>
               <span>
-                {diag?.server ? `${diag.server.platform}/${diag.server.arch} (Node ${diag.server.node})` : "探测中…"}
+                {diag?.server ? `${diag.server.platform}/${diag.server.arch} (Node ${diag.server.node})` : t("diagnostics.probing")}
               </span>
             </div>
           </div>
@@ -899,7 +912,7 @@ function BackendDiagnosticsFullView() {
             }}
           >
             <Activity size={13} className={actionBusy ? "animate-spin" : undefined} aria-hidden="true" />
-            {isZh ? "一键无损修复" : "Repair Host"}
+            {t("diagnostics.oneClickRepair")}
           </button>
 
           <button
@@ -1024,15 +1037,15 @@ function BackendDiagnosticsFullView() {
         const missingOmp = !diag.omp.installed;
 
         const issues = [
-          missingOmp ? { key: "omp", title: "OMP 引擎缺失", detail: "系统路径下未检测到 omp 可执行文件，代理核心功能受限。", action: undefined } : null,
-          hostDown || hostCrash ? { key: "host", title: "Rust Host 守护进程异常", detail: "Host 未就绪或发生崩溃，一键修复将清理孤立进程并自动重新拉起。", action: <button type="button" onClick={() => void repairHost()} disabled={actionBusy} style={{ padding: "5px 12px", borderRadius: "var(--radius-control)", background: "var(--accent)", color: "var(--on-accent)", border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t("diagnostics.repair")}</button> } : null,
-          orphan ? { key: "orphan", title: `检测到 ${diag.rpc.orphanRustHosts} 个孤立 Host 进程`, detail: "孤儿进程可能占用系统会话锁或伪终端句柄，建议及时回收。", action: <button type="button" onClick={() => void repairHost()} disabled={actionBusy} style={{ padding: "5px 12px", borderRadius: "var(--radius-control)", background: "var(--accent)", color: "var(--on-accent)", border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>清理孤立进程</button> } : null,
-          rpcFailed ? { key: "rpc", title: `近期有 ${diag.rpc.recentFailures?.length} 次 RPC 会话失败`, detail: "可能由模型子进程异常终止引起，重启 RPC 可恢复所有断开通道。", action: <button type="button" onClick={() => void restartRpc()} disabled={restarting || actionBusy} style={{ padding: "5px 12px", borderRadius: "var(--radius-control)", background: "var(--bg-subtle)", color: "var(--text)", border: "1px solid var(--border)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t("diagnostics.restartRpc")}</button> } : null,
+          missingOmp ? { key: "omp", title: t("diagnostics.fullIssueOmpTitle"), detail: t("diagnostics.fullIssueOmpDetail"), action: undefined } : null,
+          hostDown || hostCrash ? { key: "host", title: t("diagnostics.fullIssueHostTitle"), detail: t("diagnostics.fullIssueHostDetail"), action: <button type="button" onClick={() => void repairHost()} disabled={actionBusy} style={{ padding: "5px 12px", borderRadius: "var(--radius-control)", background: "var(--accent)", color: "var(--on-accent)", border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t("diagnostics.repair")}</button> } : null,
+          orphan ? { key: "orphan", title: t("diagnostics.fullIssueOrphanTitle", { count: diag.rpc.orphanRustHosts ?? 0 }), detail: t("diagnostics.fullIssueOrphanDetail"), action: <button type="button" onClick={() => void repairHost()} disabled={actionBusy} style={{ padding: "5px 12px", borderRadius: "var(--radius-control)", background: "var(--accent)", color: "var(--on-accent)", border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t("diagnostics.repairOrphans")}</button> } : null,
+          rpcFailed ? { key: "rpc", title: t("diagnostics.fullIssueRpcTitle", { count: diag.rpc.recentFailures?.length ?? 0 }), detail: t("diagnostics.fullIssueRpcDetail"), action: <button type="button" onClick={() => void restartRpc()} disabled={restarting || actionBusy} style={{ padding: "5px 12px", borderRadius: "var(--radius-control)", background: "var(--bg-subtle)", color: "var(--text)", border: "1px solid var(--border)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t("diagnostics.restartRpc")}</button> } : null,
           ...otherInstances.map((port) => ({
             key: `instance-${port}`,
-            title: `检测到端口冲突实例 (127.0.0.1:${port})`,
-            detail: "另一 ompweb 实例正在运行，可能产生会话并发读写竞争或锁冲突。",
-            action: <button type="button" onClick={() => void stopOtherInstance(port)} disabled={actionBusy} style={{ padding: "5px 12px", borderRadius: "var(--radius-control)", background: "color-mix(in srgb, var(--status-error) 15%, var(--bg))", color: "var(--status-error)", border: "1px solid var(--status-error)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>关闭该实例</button>,
+            title: t("diagnostics.fullIssueInstanceTitle", { port }),
+            detail: t("diagnostics.fullIssueInstanceDetail"),
+            action: <button type="button" onClick={() => void stopOtherInstance(port)} disabled={actionBusy} style={{ padding: "5px 12px", borderRadius: "var(--radius-control)", background: "color-mix(in srgb, var(--status-error) 15%, var(--bg))", color: "var(--status-error)", border: "1px solid var(--status-error)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t("diagnostics.stopInstance")}</button>,
           })),
         ].filter(Boolean) as Array<{ key: string; title: string; detail: string; action?: ReactNode }>;
 
@@ -1117,16 +1130,16 @@ function BackendDiagnosticsFullView() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>Node.js / 架构:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.nodeArch")}</span>
               <code style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>{diag?.server ? `${diag.server.node} (${diag.server.arch})` : "—"}</code>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>内存占用 (RSS):</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.rssMemory")}</span>
               <code style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>{formatBytes(diag?.system?.memory.rss)}</code>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>CPU / 主机:</span>
-              <code style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>{diag?.system ? `${diag.system.cpus} 核 · ${diag.system.hostname}` : "—"}</code>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.cpuHost")}</span>
+              <code style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>{diag?.system ? `${diag.system.cpus} ${isZh ? "核" : "cores"} · ${diag.system.hostname}` : "—"}</code>
             </div>
           </div>
         </div>
@@ -1160,7 +1173,7 @@ function BackendDiagnosticsFullView() {
           </div>
           <div>
             <div style={{ fontSize: 22, fontWeight: 700, color: "var(--text)", letterSpacing: -0.5 }}>
-              {diag?.omp.installed ? (diag.omp.version ?? "已就绪") : (isZh ? "未安装" : "Missing")}
+              {diag?.omp.installed ? (diag.omp.version ?? (isZh ? "已就绪" : "Ready")) : (isZh ? "未安装" : "Missing")}
             </div>
             <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>
               {diag?.omp.installed ? (isZh ? "CLI 引擎版本" : "CLI Engine Version") : (isZh ? "需安装 omp CLI" : "CLI Required")}
@@ -1168,19 +1181,19 @@ function BackendDiagnosticsFullView() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ color: "var(--text-muted)" }}>安装状态:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.installStatus")}</span>
               <span style={{ color: diag?.omp.installed ? "var(--status-success)" : "var(--status-error)", fontWeight: 600 }}>
                 {diag?.omp.installed ? (isZh ? "已安装就绪" : "Installed") : (isZh ? "缺失" : "Missing")}
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>网络代理:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.networkProxy")}</span>
               <span style={{ color: diag?.proxy.effective ? "var(--accent)" : "var(--text-dim)" }}>
                 {diag?.proxy.effective ?? (isZh ? "直连模式" : "Direct")}
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>工具链:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.toolchain")}</span>
               <span style={{ color: "var(--text)" }}>
                 {diag?.server.tools ? Object.entries(diag.server.tools).filter(([, ok]) => ok).map(([k]) => k).join(", ") : "—"}
               </span>
@@ -1225,17 +1238,17 @@ function BackendDiagnosticsFullView() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>IPC 协议:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.ipcProtocol")}</span>
               <code style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>TCP 127.0.0.1</code>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>孤立进程:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.orphanProcesses")}</span>
               <span style={{ color: (diag?.rpc.orphanRustHosts ?? 0) > 0 ? "var(--status-warning)" : "var(--text-dim)" }}>
-                {diag?.rpc.orphanRustHosts ?? 0} {isZh ? "个孤儿 host" : "orphans"}
+                {diag?.rpc.orphanRustHosts ?? 0} {isZh ? "个孤立" : "orphans"}
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>守护状态:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.supervisorStatus")}</span>
               <span style={{ color: "var(--status-success)", fontWeight: 500 }}>Supervisor Active</span>
             </div>
           </div>
@@ -1276,19 +1289,19 @@ function BackendDiagnosticsFullView() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>Web 绑定:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.webBinding")}</span>
               <code style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>127.0.0.1:{diag?.web.port ?? "—"}</code>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>近期失败:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.recentFailuresLabel")}</span>
               <span style={{ color: (diag?.rpc.recentFailures?.length ?? 0) > 0 ? "var(--status-error)" : "var(--text-dim)" }}>
                 {diag?.rpc.recentFailures?.length ?? 0} {isZh ? "次" : ""}
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-muted)" }}>冲突实例:</span>
+              <span style={{ color: "var(--text-muted)" }}>{t("diagnostics.conflictingInstances")}</span>
               <span style={{ color: (diag?.instances?.others.length ?? 0) > 0 ? "var(--status-warning)" : "var(--text-dim)" }}>
-                {(diag?.instances?.others.length ?? 0) === 0 ? (isZh ? "无冲突" : "None") : `${diag!.instances!.others.length} 个实例`}
+                {(diag?.instances?.others.length ?? 0) === 0 ? (isZh ? "无冲突" : "None") : `${diag!.instances!.others.length} ${isZh ? "个实例" : "instances"}`}
               </span>
             </div>
           </div>
@@ -1311,10 +1324,10 @@ function BackendDiagnosticsFullView() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", display: "inline-flex", alignItems: "center", gap: 6 }}>
             <Network size={15} aria-hidden="true" />
-            <span>{isZh ? "运行服务拓扑与网络流 (Runtime Architecture Topology)" : "Runtime Topology"}</span>
+            <span>{t("diagnostics.runtimeTopology")}</span>
           </div>
           <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
-            {diag?.proxy.effective ? `代理: ${diag.proxy.effective}` : (isZh ? "网络: 直连模式" : "Network: Direct")}
+            {diag?.proxy.effective ? `${t("diagnostics.networkProxy")} ${diag.proxy.effective}` : (isZh ? "网络: 直连模式" : "Network: Direct")}
           </span>
         </div>
 
@@ -1340,7 +1353,7 @@ function BackendDiagnosticsFullView() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>Web UI 客户端</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>{t("diagnostics.webClient")}</span>
               <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--status-success)" }} />
             </div>
             <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Next.js Client / Electron</span>
@@ -1364,7 +1377,7 @@ function BackendDiagnosticsFullView() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>Next.js 服务端</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>{t("diagnostics.webServer")}</span>
               <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--status-success)" }} />
             </div>
             <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Port {diag?.web.port ?? "30178"} · Node {diag?.server.node}</span>
@@ -1388,7 +1401,7 @@ function BackendDiagnosticsFullView() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>Rust Host 守护</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>{t("diagnostics.rustHostDaemon")}</span>
               <span
                 style={{
                   width: 6,
@@ -1419,7 +1432,7 @@ function BackendDiagnosticsFullView() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>OMP 引擎进程</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>{t("diagnostics.ompEngineProcess")}</span>
               <span
                 style={{
                   width: 6,
@@ -1608,7 +1621,7 @@ function BackendDiagnosticsFullView() {
                     flexShrink: 0,
                   }}
                 >
-                  {isRust ? "RUST 宿主" : "NODE.JS"}
+                  {isRust ? "RUST HOST" : "NODE.JS"}
                 </span>
               </div>
             );

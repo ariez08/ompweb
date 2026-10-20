@@ -73,8 +73,8 @@ export function ThemePicker() {
           e.stopPropagation();
           setOpen((prev) => !prev);
         }}
-        title={t("appShell.switchTheme") || "主题与字体外观"}
-        aria-label={t("appShell.switchTheme") || "主题与字体外观"}
+        title={t("appShell.switchTheme")}
+        aria-label={t("appShell.switchTheme")}
         aria-expanded={open}
         className="shell-toolbar-btn ui-focus-ring"
         style={{
@@ -127,7 +127,7 @@ export function ThemePicker() {
             }}
           >
             <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>
-              {t("appShell.themePalette") || "视觉中心 · 主题与排版"}
+              {t("appShell.themePalette")}
             </span>
             <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
               {preference.toUpperCase()} · {chatFontSize}px
@@ -161,7 +161,7 @@ export function ThemePicker() {
                 color: activeTab === "static" ? "var(--text)" : "var(--text-muted)",
               }}
             >
-              静态
+              {t("themePicker.tabStatic")}
             </button>
             <button
               type="button"
@@ -182,7 +182,7 @@ export function ThemePicker() {
               }}
             >
               <Waves size={11} />
-              <span>流动</span>
+              <span>{t("themePicker.tabFlow")}</span>
             </button>
             <button
               type="button"
@@ -203,7 +203,7 @@ export function ThemePicker() {
               }}
             >
               <Sliders size={11} />
-              <span>调色</span>
+              <span>{t("themePicker.tabCustom")}</span>
             </button>
             <button
               type="button"
@@ -224,7 +224,7 @@ export function ThemePicker() {
               }}
             >
               <Sparkles size={11} />
-              <span>动效</span>
+              <span>{t("themePicker.tabMotion")}</span>
             </button>
             <button
               type="button"
@@ -245,7 +245,7 @@ export function ThemePicker() {
               }}
             >
               <Type size={11} />
-              <span>字体</span>
+              <span>{t("themePicker.tabFont")}</span>
             </button>
           </div>
 
@@ -301,7 +301,7 @@ export function ThemePicker() {
           {activeTab === "flowing" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <div style={{ fontSize: 11, color: "var(--text-dim)", padding: "2px 6px" }}>
-                动态流动渐变光效 · 呼吸流转
+                {t("themePicker.flowDesc")}
               </div>
               {flowingThemes.map((opt) => {
                 const active = preference === opt.id;
@@ -354,23 +354,23 @@ export function ThemePicker() {
               {/* Inspiration Presets */}
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>
-                  灵感风格预设 (Inspiration Presets)
+                  {t("themePicker.presetsTitle")}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
                   {[
-                    { name: "赛博霓虹", accent: "#38BDF8", bg: "#0B0F19", isDark: true, mode: "flow" as const },
-                    { name: "极光翠绿", accent: "#34D399", bg: "#091410", isDark: true, mode: "flow" as const },
-                    { name: "德古拉紫", accent: "#BD93F9", bg: "#161020", isDark: true, mode: "flow" as const },
-                    { name: "烈焰流金", accent: "#F59E0B", bg: "#1C140C", isDark: true, mode: "flow" as const },
-                    { name: "樱落暮雪", accent: "#FB7185", bg: "#1A0F15", isDark: true, mode: "flow" as const },
-                    { name: "纯黑极曜", accent: "#00E5FF", bg: "#000000", isDark: true, mode: "flow" as const },
-                    { name: "暖阳手帐", accent: "#B03E22", bg: "#FAF9F6", isDark: false, mode: "static" as const },
-                    { name: "燕麦拿铁", accent: "#965A38", bg: "#F7F4EE", isDark: false, mode: "static" as const },
+                    { labelKey: "themePicker.presetCyberNeon", accent: "#38BDF8", bg: "#0B0F19", isDark: true, mode: "flow" as const },
+                    { labelKey: "themePicker.presetAuroraGreen", accent: "#34D399", bg: "#091410", isDark: true, mode: "flow" as const },
+                    { labelKey: "themePicker.presetDraculaPurple", accent: "#BD93F9", bg: "#161020", isDark: true, mode: "flow" as const },
+                    { labelKey: "themePicker.presetBlazingGold", accent: "#F59E0B", bg: "#1C140C", isDark: true, mode: "flow" as const },
+                    { labelKey: "themePicker.presetCherrySnow", accent: "#FB7185", bg: "#1A0F15", isDark: true, mode: "flow" as const },
+                    { labelKey: "themePicker.presetPureBlack", accent: "#00E5FF", bg: "#000000", isDark: true, mode: "flow" as const },
+                    { labelKey: "themePicker.presetWarmJournal", accent: "#B03E22", bg: "#FAF9F6", isDark: false, mode: "static" as const },
+                    { labelKey: "themePicker.presetOatLatte", accent: "#965A38", bg: "#F7F4EE", isDark: false, mode: "static" as const },
                   ].map((preset) => {
                     const isCurrent = customConfig.accent === preset.accent && customConfig.bg === preset.bg;
                     return (
                       <button
-                        key={preset.name}
+                        key={preset.labelKey}
                         type="button"
                         onClick={() => handleCustomChange(preset)}
                         style={{
@@ -399,7 +399,7 @@ export function ThemePicker() {
                           }}
                         />
                         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {preset.name}
+                          {t(preset.labelKey)}
                         </span>
                       </button>
                     );
@@ -410,7 +410,7 @@ export function ThemePicker() {
               {/* Mode toggle */}
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>
-                  渲染模式 (Mode)
+                  {t("themePicker.renderMode")}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                   <button
@@ -432,7 +432,7 @@ export function ThemePicker() {
                       boxShadow: customConfig.mode === "static" ? "0 0 8px color-mix(in srgb, var(--accent) 25%, transparent)" : "none",
                     }}
                   >
-                    <span>静态色彩</span>
+                    <span>{t("themePicker.modeStatic")}</span>
                   </button>
                   <button
                     type="button"
@@ -454,7 +454,7 @@ export function ThemePicker() {
                     }}
                   >
                     <Waves size={12} />
-                    <span>流动流光</span>
+                    <span>{t("themePicker.modeFlow")}</span>
                   </button>
                 </div>
               </div>
@@ -462,7 +462,7 @@ export function ThemePicker() {
               {/* Accent Color */}
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>
-                  强调色 (Accent Color)
+                  {t("themePicker.accentColor")}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                   <input
@@ -523,7 +523,7 @@ export function ThemePicker() {
               {/* Background Color */}
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>
-                  背景底色 (Background Color)
+                  {t("themePicker.bgColor")}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                   <input
@@ -587,7 +587,7 @@ export function ThemePicker() {
               {/* Dark / Light Toggle */}
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>
-                  基底明暗 (Base Tone)
+                  {t("themePicker.baseTone")}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
                   <button
@@ -609,7 +609,7 @@ export function ThemePicker() {
                     }}
                   >
                     <Sun size={12} />
-                    <span>浅色明亮</span>
+                    <span>{t("themePicker.toneLight")}</span>
                   </button>
                   <button
                     type="button"
@@ -630,7 +630,7 @@ export function ThemePicker() {
                     }}
                   >
                     <Moon size={12} />
-                    <span>深色暗夜</span>
+                    <span>{t("themePicker.toneDark")}</span>
                   </button>
                 </div>
               </div>
@@ -638,7 +638,7 @@ export function ThemePicker() {
               {/* OMP Letters Color Fine-Tuning */}
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>
-                  OMP 字符专属配色 (OMP Loader Colors)
+                  {t("themePicker.ompLoaderColors")}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -689,8 +689,8 @@ export function ThemePicker() {
                 }}
               >
                 <div>
-                  <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--text)" }}>全局动效开关</div>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)" }}>开启或关闭全站动态效果</div>
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--text)" }}>{t("motion.globalToggle")}</div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)" }}>{t("motion.globalToggleDesc")}</div>
                 </div>
                 <button
                   type="button"
@@ -734,8 +734,8 @@ export function ThemePicker() {
               >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                   <div>
-                    <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text)" }}>对话框边框流光</div>
-                    <div style={{ fontSize: 10, color: "var(--text-muted)" }}>对话中沿边框顺时针游走</div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text)" }}>{t("motion.borderBeam")}</div>
+                    <div style={{ fontSize: 10, color: "var(--text-muted)" }}>{t("motion.borderBeamDesc")}</div>
                   </div>
                   <button
                     type="button"
@@ -772,15 +772,15 @@ export function ThemePicker() {
                 {motionPrefs.enabled && motionPrefs.chatBorderBeam && (
                   <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid color-mix(in srgb, var(--border) 60%, transparent)" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--text-dim)", marginBottom: 4 }}>
-                      <span>流速周期</span>
-                      <span style={{ fontFamily: "var(--font-mono)", color: "var(--accent)", fontWeight: 600 }}>{motionPrefs.beamSpeed} 秒/周</span>
+                      <span>{t("themePicker.beamCycle")}</span>
+                      <span style={{ fontFamily: "var(--font-mono)", color: "var(--accent)", fontWeight: 600 }}>{motionPrefs.beamSpeed}s</span>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 3 }}>
                       {[
-                        { label: "极慢 8s", speed: 8 },
-                        { label: "慢速 5.5s", speed: 5.5 },
-                        { label: "标准 3.8s", speed: 3.8 },
-                        { label: "快速 2.2s", speed: 2.2 },
+                        { label: t("motion.speedUltraSlow"), speed: 8 },
+                        { label: t("motion.speedSlow"), speed: 5.5 },
+                        { label: t("motion.speedStandard"), speed: 3.8 },
+                        { label: t("motion.speedFast"), speed: 2.2 },
                       ].map((s) => (
                         <button
                           key={s.speed}
@@ -819,8 +819,8 @@ export function ThemePicker() {
                 }}
               >
                 <div>
-                  <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text)" }}>OMP 字符跳动动效</div>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)" }}>等待响应时 o·m·p 独立循环跳动</div>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text)" }}>{t("motion.ompBouncing")}</div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)" }}>{t("motion.ompBouncingDesc")}</div>
                 </div>
                 <button
                   type="button"
@@ -867,8 +867,8 @@ export function ThemePicker() {
                 }}
               >
                 <div>
-                  <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text)" }}>思考脑波呼吸动效</div>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)" }}>模型深度思考状态图标脉冲</div>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text)" }}>{t("motion.thinkingPulse")}</div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)" }}>{t("motion.thinkingPulseDesc")}</div>
                 </div>
                 <button
                   type="button"
@@ -908,7 +908,7 @@ export function ThemePicker() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "4px 2px" }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>
-                  字体预设 (Font Family)
+                  {t("themePicker.fontFamily")}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                   {FONT_PRESETS.map((preset) => {
@@ -950,7 +950,7 @@ export function ThemePicker() {
               <div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                   <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>
-                    对话字号大小 (Font Size)
+                    {t("themePicker.fontSize")}
                   </span>
                   <span style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", fontFamily: "var(--font-mono)" }}>
                     {chatFontSize} px
@@ -990,9 +990,9 @@ export function ThemePicker() {
                   </button>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "var(--text-dim)" }}>
-                  <span>精简 (12px)</span>
-                  <span>标准 (14px)</span>
-                  <span>超大 (20px)</span>
+                  <span>{t("themePicker.sizeCompact")}</span>
+                  <span>{t("themePicker.sizeStandard")}</span>
+                  <span>{t("themePicker.sizeLarge")}</span>
                 </div>
               </div>
             </div>

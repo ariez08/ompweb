@@ -3,7 +3,7 @@
   "files": {
     "app/remote/page.tsx": 1,
     "components/AgentsConfig.tsx": 5,
-    "components/AppShell.tsx": 11,
+    "components/AppShell.tsx": 12,
     "components/ArchiveBrowser.tsx": 2,
     "components/BackendDiagnostics.tsx": 12,
     "components/CapabilitiesPicker.tsx": 1,
@@ -22,7 +22,7 @@
     "components/PluginsConfig.tsx": 3,
     "components/ProfileSwitcher.tsx": 2,
     "components/RemoteAccessSetting.tsx": 7,
-    "components/SessionSidebar.tsx": 20,
+    "components/SessionSidebar.tsx": 22,
     "components/SettingsConfig.tsx": 6,
     "components/SkillsConfig.tsx": 6,
     "components/SubagentTranscriptDialog.tsx": 2,

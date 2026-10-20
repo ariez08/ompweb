@@ -953,14 +953,14 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                 </div>
 
                 <div style={{ marginTop: 12, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
-                  <h4 style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px", color: "var(--text)" }}>动画与动效 (Animations & Motion)</h4>
-                  <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--text-muted)" }}>管理全站交互动效、边框流光与跳动动画开关</p>
+                  <h4 style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px", color: "var(--text)" }}>{t("motion.title")}</h4>
+                  <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--text-muted)" }}>{t("motion.description")}</p>
                   <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))", gap: 10 }}>
-                    <NativeSetting searchId="global-animations" label="全局动效总开关" description="开启或关闭全站所有动态效果与过渡动画" scope="UI">
+                    <NativeSetting searchId="global-animations" label={t("motion.globalToggle")} description={t("motion.globalToggleDesc")} scope="UI">
                       <ToggleSwitch checked={motionPrefs.enabled} onChange={(next) => setMotionPrefs({ enabled: next })} />
                     </NativeSetting>
 
-                    <NativeSetting searchId="chat-border-beam" label="对话框边框流光" description="对话响应中沿输入框边缘顺时针流淌" scope="UI">
+                    <NativeSetting searchId="chat-border-beam" label={t("motion.borderBeam")} description={t("motion.borderBeamDesc")} scope="UI">
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         {motionPrefs.enabled && motionPrefs.chatBorderBeam && (
                           <select
@@ -968,10 +968,10 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                             value={motionPrefs.beamSpeed}
                             onChange={(e) => setMotionPrefs({ beamSpeed: Number(e.target.value) })}
                           >
-                            <option value={8} style={nativeOptionStyle}>极慢 (8.0s)</option>
-                            <option value={5.5} style={nativeOptionStyle}>慢速 (5.5s)</option>
-                            <option value={3.8} style={nativeOptionStyle}>标准 (3.8s)</option>
-                            <option value={2.2} style={nativeOptionStyle}>快速 (2.2s)</option>
+                            <option value={8} style={nativeOptionStyle}>{t("motion.speedUltraSlow")}</option>
+                            <option value={5.5} style={nativeOptionStyle}>{t("motion.speedSlow")}</option>
+                            <option value={3.8} style={nativeOptionStyle}>{t("motion.speedStandard")}</option>
+                            <option value={2.2} style={nativeOptionStyle}>{t("motion.speedFast")}</option>
                           </select>
                         )}
                         <ToggleSwitch
@@ -982,7 +982,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                       </div>
                     </NativeSetting>
 
-                    <NativeSetting searchId="omp-bouncing-letters" label="OMP 字符跳动动效" description="等待响应时 o·m·p 字母独立循环跳动" scope="UI">
+                    <NativeSetting searchId="omp-bouncing-letters" label={t("motion.ompBouncing")} description={t("motion.ompBouncingDesc")} scope="UI">
                       <ToggleSwitch
                         checked={motionPrefs.enabled && motionPrefs.ompBouncing}
                         disabled={!motionPrefs.enabled}
@@ -990,7 +990,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                       />
                     </NativeSetting>
 
-                    <NativeSetting searchId="thinking-pulse" label="思考脑波呼吸动效" description="模型深度思考状态图标脉冲" scope="UI">
+                    <NativeSetting searchId="thinking-pulse" label={t("motion.thinkingPulse")} description={t("motion.thinkingPulseDesc")} scope="UI">
                       <ToggleSwitch
                         checked={motionPrefs.enabled && motionPrefs.thinkingPulse}
                         disabled={!motionPrefs.enabled}
@@ -1558,14 +1558,14 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                 }}
               >
                 <div>
-                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: "var(--text)" }}>系统诊断与自愈中心</h3>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: "var(--text)" }}>{t("diagnostics.centerTitle")}</h3>
                   <p style={{ margin: "4px 0 0", color: "var(--text-muted)", fontSize: 12.5, lineHeight: 1.5 }}>
-                    集中监控 OMP 引擎、Rust Host 守护进程、会话存储、网络代理与系统资源，并提供一键故障自愈与路径快速定位。
+                    {t("diagnostics.centerDesc")}
                   </p>
                 </div>
                 <BackendDiagnosticsBody variant="full" />
                 <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5, marginTop: 4 }}>
-                  诊断检测全程在本地环回执行，不采集任何提示词、会话上下文或 API 密钥；自愈操作安全受控，仅针对当前服务管理的子进程。
+                  {t("diagnostics.centerDisclaimer")}
                 </div>
               </div>
             )}
