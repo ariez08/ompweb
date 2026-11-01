@@ -100,3 +100,16 @@
 - 工作树保留本轮源码、测试、生成基线和文档变更；提交前应由维护者确认生成文件和历史测试残留是否一并纳入。
 
 **最终判定：** 5.1 UI、设置、诊断、启动衔接、会话空白/抽搐修复和 Rust PTY writer 已完成代码级收口，开发浏览器已定向冒烟通过，macOS App 已更新并通过健康/Host/设置探针。项目整体仍处于“5.1 可测试候选 + Rust Production Cutover 进行中”，不是 R0–R23 全部完成、签名公证和外部系统均已验收的正式 release。
+
+---
+
+## 增补：状态推进（2026-11-01 审计）
+
+本报告写于 2026-09-04（基线 5.1.0/5.1.9）。以下为之后落地的事实，读本报告时以本节为准。
+
+- **当前版本与分支**：`custom/stable-prod`，`package.json` 已是 `5.2.0`。npm 已发布版本仍为 `5.1.9`；本地与远端均无 git tag。
+- **分支位置**：领先 `origin/custom/stable-prod` 1 个提交，领先 `origin/main` 28 个提交。
+- **5.1 之后已闭环的新波次**（本报告未包含）：multi-profile live（单进程多 profile）、session CLI lock 系列修复（`085dc3c`、`903c578`、`54590b5`、`4dd0052`、`aaf927f`）、branch lineage + fork navigator（`e3a2840`、`92ad8bc`）、capabilities toggle 首片（`8f93722`，实现状态见 `docs/plans/2026-10-17-ompweb-capabilities-toggle.md` §7）。
+- **PTY 浏览器阻断项仅部分转绿**：本报告审计时“终端在浏览器中确定性退出”是发布阻断项；此后 `c92a51d`（5.1.8/5.1.9）修复了 PTY 授权目录别名与真实路径不一致导致的创建失败（证据见 `docs/refactor/ompweb-stability-closeout-2026-09-05/01-findings.md`）。但**尚无**新的浏览器端 PTY 端到端证据，因此不能宣称已验收。
+- **仍然有效的内容**：第 87–94 节的六条项目级风险，以及第 71–85 节 Rust cutover 表格中标记“未开始/未验收/部分”的条目，均未因上述提交而改变。
+- **下一步顺序**（取代原“Git 与发布判定”中的建议）：先复跑 `npm test` / `tsc --noEmit` / `eslint .` / `npm run build` 确认 5.2.0 门禁，再补 PTY 浏览器端到端证据，最后才讨论 tag 与 npm 发布。

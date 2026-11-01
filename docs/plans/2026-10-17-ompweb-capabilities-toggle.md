@@ -4,7 +4,7 @@
 |---|---|
 | **Target Branch** | `feat/capabilities-toggle` (bercabang dari `feat/multi-profile-live` @ `4dd0052`) |
 | **Baseline** | OmpWeb `5.1.9` + Multi-Profile Live + Session CLI Lock Guard |
-| **Status** | **Rancangan Rinci (Plan)** |
+| **Status** | **Terimplementasi sebagian** — mendarat di `8f93722` (`custom/stable-prod`, v5.2.0). Terkirim: 3 preset, engine bridge `--tools`/`--skills` (termasuk `--resume`), katalog `GET /api/capabilities`, hot-swap `POST /api/agent/[id]/capabilities`, notice model-aware. Tertunda: accordion custom, `disabledMcp`, selector lingkup UI, benchmark token. Lihat §7. |
 | **Scope** | Kontrol token granular untuk tools (native + MCP) dan skills per-workspace & per-session dengan model-awareness mid-chat |
 
 ---
@@ -255,3 +255,38 @@ Di `app/api/agent/[id]/route.ts` saat prompt berikutnya dikirim setelah perubaha
 | User mematikan tool `read` saat coding | Agent buta tidak bisa membaca kode | Tool `read` diberi status *recommended core* dan dicegah mati jika mode coding aktif. |
 | Respawn saat turn aktif memutus pekerjaan | Sesi rusak / terpotong | Jika status `sessionBusy`, perubahan di-*latch* dan baru di-respawn begitu `agent_end` selesai. |
 | Konflik file lock CLI saat swap | Session split | Menggunakan instance wrapper internal `destroyAndWait` yang sudah ada, tanpa memicu `open-elsewhere`. |
+
+---
+
+## 7. Status Implementasi (audit 2026-11-01)
+
+Commit `8f93722` (2026-10-17) mendaratkan sebagian plan. Bagian di bawah ini adalah
+status terverifikasi terhadap kode di `custom/stable-prod` v5.2.0 — bukan rencana.
+
+### Terkirim
+
+| Fase | Bukti |
+|---|---|
+| Fase 1 — bridge engine | `lib/rpc-manager.ts:153` `buildSessionSpawnArgs` memetakan preset ke `--tools`/`--no-tools` dan `--skills`/`--no-skills`, diterapkan baik pada spawn baru (`:1525`) maupun `restart`/`--resume` (`:962`). `lib/tool-presets.ts:139` `mapPresetToolNames`. |
+| Fase 2 — katalog & hot-swap | `app/api/capabilities/route.ts` (GET katalog, POST tulis `<workspace>/.omp/config.yml`), `app/api/agent/[id]/capabilities/route.ts` → `AgentSessionWrapper.updateCapabilities` (`lib/rpc-manager.ts:1001`) yang restart hanya jika sesi tidak running. |
+| Fase 3 — UI (3 preset) | `components/CapabilitiesPicker.tsx` (305 baris): `chat_only`, `code_editor`, `full_agent` + badge token statis. Dipasang di toolbar `ChatInput`. |
+| Fase 4 — model awareness | `hooks/useAgentSession.ts:683` menyiapkan notice, `:2667` menempelkannya ke prompt berikutnya; kunci i18n `capabilities.noticeUpdated` (`lib/i18n/locales/*.json:209`). |
+| Gerbang | `lib/capabilities-service.test.mjs` (2 tes), entri baru di `lib/contracts/fixtures/error-codes.json` dan `scripts/client-api-allowlist.json`. |
+
+### Tertunda (belum ada di kode)
+
+| Item | Kondisi nyata |
+|---|---|
+| Accordion checklist custom (tools/MCP/skills per item) | Tidak ada. `handleSelectPreset("custom")` di `CapabilitiesPicker.tsx:96` hanya memakai default `["read","edit","write","bash"]`; tidak ada UI pemilihan. |
+| `disabledMcp` | Tipe ada (`lib/capabilities-types.ts:14`) tetapi tidak pernah dibaca: `grep disabledMcp` hanya menemukan deklarasi dan presets, tidak ada konsumen. |
+| Selector lingkup "Hanya sesi ini" vs "Simpan ke workspace" | State `saveToWorkspace` ada di `CapabilitiesPicker.tsx:32` tetapi tidak pernah di-`set`; nilainya selalu `false`, sehingga `POST /api/capabilities` (persistensi workspace) tidak pernah terpanggil dari UI. |
+| Latch saat sesi busy | Tidak ada `pendingCapabilities`. `updateCapabilities` (`lib/rpc-manager.ts:1001`) langsung menimpa field lalu restart bila idle; saat busy perubahan hanya tersimpan di memori wrapper tanpa respawn terjadwal. |
+| Pencegahan mematikan `read` saat mode coding | Tidak ada. Tidak ditemukan logika "recommended core" di `lib/tool-presets.ts`. |
+| Benchmark token terukur | Belum dijalankan. Angka `6.000`/`3.700` token di `CapabilitiesPicker.tsx:190` adalah hardcode, bukan hasil pengukuran. |
+
+### Catatan verifikasi
+
+Perilaku di atas ditelusuri lewat pembacaan kode dan `codegraph`, bukan uji runtime
+di browser. Sebelum mengklaim fitur selesai, empat item tertunda di atas perlu
+diimplementasikan lalu dibuktikan pada sesi hidup (preset → prompt → cek tool list
+pada `--tools` hasil spawn).
