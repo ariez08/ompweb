@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/lib/i18n";
 import { isSafeExternalUrl } from "@/lib/safe-url";
@@ -23,7 +23,7 @@ import {
   ConfirmDialog,
   useFieldValidation,
 } from "@/components/ui/field";
-import { Plus, Trash2, RefreshCw, AlertCircle, Cpu, Settings, Sparkles, Check as CheckIcon, ArrowDown, ArrowUp, ChevronRight, Layers, RotateCcw, SlidersHorizontal, BookOpen, Search } from "lucide-react";
+import { Plus, Trash2, RefreshCw, AlertCircle, Cpu, Settings, Sparkles, Check as CheckIcon, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Layers, RotateCcw, SlidersHorizontal, BookOpen, Search } from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import { SettingsTabs, type SettingsTab } from "./SettingsTabs";
 import { ModelCatalogPicker } from "./ModelCatalogPicker";
@@ -104,7 +104,7 @@ type ModelTestState =
   | { phase: "success"; latencyMs?: number; status?: number; responseText?: string }
   | { phase: "error"; message: string; latencyMs?: number; status?: number };
 
-type Selection =
+export type Selection =
   | { type: "provider"; name: string }
   | { type: "model"; providerName: string; index: number }
   | { type: "oauth"; providerId: string }
@@ -356,22 +356,376 @@ export function toggleCollapsedProvider(current: string[], provider: string): st
 }
 const NATIVE_MODEL_ROLES = ["default", "smol", "slow", "vision", "plan", "designer", "commit", "tiny", "task", "advisor"];
 
+function RoleModelPicker({
+  role,
+  value,
+  models,
+  onChange,
+}: {
+  role: string;
+  value: string;
+  models: RuntimeModelEntry[];
+  onChange: (modelKey: string) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState("all");
+  const [rect, setRect] = useState<{ top: number; bottom: number; left: number; width: number } | null>(null);
+
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const selectedModel = models.find((item) => `${item.provider}/${item.id}` === value);
+  const displayName = selectedModel
+    ? `${selectedModel.name || selectedModel.id} (${selectedModel.provider})`
+    : value
+    ? `${value} (not currently available)`
+    : t("modelsConfig.noOverride");
+
+  const openPicker = () => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (r) {
+      setRect({ top: r.top, bottom: r.bottom, left: r.left, width: r.width });
+    }
+    setOpen(true);
+    setSearchQuery("");
+    setProviderFilter("all");
+    requestAnimationFrame(() => searchInputRef.current?.focus());
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (
+        triggerRef.current && !triggerRef.current.contains(e.target as Node) &&
+        panelRef.current && !panelRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const modelOptions = useMemo(() => {
+    return models.map((m: RuntimeModelEntry) => ({
+      key: `${m.provider}/${m.id}`,
+      provider: m.provider,
+      modelId: m.id,
+      name: m.name || m.id,
+    }));
+  }, [models]);
+
+  const allProviders = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of modelOptions) s.add(m.provider);
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [modelOptions]);
+
+  const filteredModels = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return modelOptions;
+    return modelOptions.filter((m: { key: string; provider: string; modelId: string; name: string }) =>
+      m.name.toLowerCase().includes(q) ||
+      m.modelId.toLowerCase().includes(q) ||
+      m.provider.toLowerCase().includes(q)
+    );
+  }, [modelOptions, searchQuery]);
+
+  const providerMatchCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of filteredModels) {
+      map.set(m.provider, (map.get(m.provider) ?? 0) + 1);
+    }
+    return map;
+  }, [filteredModels]);
+
+  const displayedGroups = useMemo(() => {
+    const targetModels = providerFilter === "all"
+      ? filteredModels
+      : filteredModels.filter((m) => m.provider === providerFilter);
+
+    type ModelItem = (typeof modelOptions)[number];
+    const groups: { provider: string; options: ModelItem[] }[] = [];
+    for (const m of targetModels) {
+      let g = groups.find((x) => x.provider === m.provider);
+      if (!g) {
+        g = { provider: m.provider, options: [] };
+        groups.push(g);
+      }
+      g.options.push(m);
+    }
+    return groups;
+  }, [filteredModels, providerFilter]);
+
+  return (
+    <div style={{ position: "relative", minWidth: 0 }}>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => (open ? setOpen(false) : openPicker())}
+        aria-label={`Model override for ${role}`}
+        className="ui-focus-ring"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+          width: "100%",
+          minWidth: 0,
+          padding: "7px 9px",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-control)",
+          background: open ? "var(--bg-hover)" : "var(--bg)",
+          color: value ? "var(--text)" : "var(--text-muted)",
+          fontSize: 12,
+          textAlign: "left",
+          cursor: "pointer",
+        }}
+      >
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {displayName}
+        </span>
+        <ChevronDown size={12} strokeWidth={1.8} style={{ flexShrink: 0, opacity: 0.7 }} aria-hidden="true" />
+      </button>
+
+      {open && rect && (() => {
+        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+        const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+        const width = Math.min(520, viewportWidth - 24);
+        const left = Math.max(12, Math.min(rect.left, viewportWidth - width - 12));
+        const spaceBelow = viewportHeight - rect.bottom - 8;
+        const spaceAbove = rect.top - 8;
+        const openUpward = spaceBelow < 260 && spaceAbove > spaceBelow;
+        const maxH = Math.max(260, Math.min(openUpward ? spaceAbove : spaceBelow, 440));
+        const top = openUpward ? undefined : rect.bottom + 4;
+        const bottom = openUpward ? viewportHeight - rect.top + 4 : undefined;
+
+        return (
+          <div
+            ref={panelRef}
+            className="picker-panel"
+            style={{
+              position: "fixed",
+              top,
+              bottom,
+              left,
+              width,
+              maxWidth: "calc(100vw - 24px)",
+              maxHeight: maxH,
+              zIndex: 1002,
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div className="picker-panel-header">
+              <Cpu size={12} strokeWidth={1.8} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
+              <span className="picker-panel-title">Model for {role}</span>
+              <span className="picker-panel-count">
+                {searchQuery.trim() ? `${filteredModels.length} / ${models.length}` : models.length}
+              </span>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="ui-focus-ring"
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  fontSize: 16,
+                  lineHeight: 1,
+                  padding: "2px 6px",
+                  marginLeft: 4,
+                  borderRadius: 4,
+                }}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <label className="picker-search">
+              <Search size={13} strokeWidth={1.8} color="var(--text-dim)" aria-hidden="true" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                autoComplete="off"
+                spellCheck={false}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search models or providers..."
+                aria-label="Search models"
+              />
+            </label>
+
+            <div className="picker-body-split">
+              {/* Left section: All & list per provider */}
+              <div className="picker-sidebar">
+                <button
+                  type="button"
+                  className="picker-sidebar-item"
+                  data-active={providerFilter === "all"}
+                  onClick={() => setProviderFilter("all")}
+                >
+                  <span className="picker-sidebar-name">{t("chatInput.allProviders")}</span>
+                  <span className="picker-sidebar-count">{filteredModels.length}</span>
+                </button>
+                {allProviders.map((provider: string) => {
+                  const count = providerMatchCounts.get(provider) ?? 0;
+                  const isSelected = providerFilter === provider;
+                  const isDimmed = searchQuery.trim().length > 0 && count === 0;
+
+                  return (
+                    <button
+                      key={provider}
+                      type="button"
+                      className="picker-sidebar-item"
+                      data-active={isSelected}
+                      data-dimmed={isDimmed}
+                      onClick={() => setProviderFilter(provider)}
+                      title={`${provider} (${count})`}
+                    >
+                      <span className="picker-sidebar-name">{provider}</span>
+                      <span className="picker-sidebar-count">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Right section: Models list */}
+              <div className="picker-list" style={{ flex: 1, minWidth: 0 }}>
+                {/* No override option */}
+                <button
+                  type="button"
+                  className="picker-row"
+                  data-active={!value}
+                  onClick={() => {
+                    onChange("");
+                    setOpen(false);
+                  }}
+                  title={t("modelsConfig.noOverride")}
+                >
+                  <span className="picker-check">
+                    {!value && (
+                      <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="1.5 5 4 7.5 8.5 2.5" />
+                      </svg>
+                    )}
+                  </span>
+                  <span style={{ color: !value ? "var(--accent)" : "var(--text-muted)", fontStyle: "italic" }}>
+                    {t("modelsConfig.noOverride")}
+                  </span>
+                </button>
+
+                {displayedGroups.length === 0 ? (
+                  <div style={{ padding: "20px 12px", textAlign: "center", color: "var(--text-dim)", fontSize: 12 }}>
+                    <div>No matching models</div>
+                    {providerFilter !== "all" && filteredModels.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setProviderFilter("all")}
+                        style={{
+                          marginTop: 8,
+                          padding: "4px 10px",
+                          fontSize: 11,
+                          background: "none",
+                          border: "1px solid var(--border)",
+                          borderRadius: 6,
+                          color: "var(--accent)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {t("chatInput.showAllMatches", { count: filteredModels.length })}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  displayedGroups.map((group) => (
+                    <div key={group.provider}>
+                      <div className="picker-group-label" style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>{group.provider}</span>
+                        <span style={{ fontSize: 9, opacity: 0.6, fontFamily: "var(--font-mono)" }}>
+                          {group.options.length}
+                        </span>
+                      </div>
+                      {group.options.map((opt) => {
+                        const isActive = opt.key === value;
+                        return (
+                          <button
+                            key={opt.key}
+                            type="button"
+                            className="picker-row"
+                            data-active={isActive}
+                            onClick={() => {
+                              onChange(opt.key);
+                              setOpen(false);
+                            }}
+                            title={`${opt.name} (${opt.key})`}
+                          >
+                            <span className="picker-check">
+                              {isActive && (
+                                <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="1.5 5 4 7.5 8.5 2.5" />
+                                </svg>
+                              )}
+                            </span>
+                            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {opt.name}
+                            </span>
+                            {opt.modelId !== opt.name && (
+                              <span className="picker-row-meta" style={{ fontFamily: "var(--font-mono)" }}>
+                                {opt.modelId}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 function ModelRolesDetail({ models }: { models: RuntimeModelEntry[] }) {
   const { t } = useI18n();
   const [roles, setRoles] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [rolesLoaded, setRolesLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/model-roles")
       .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
-      .then((data: { roles?: Record<string, string> }) => setRoles(data.roles ?? {}))
+      .then((data: { roles?: Record<string, string> }) => {
+        if (!data.roles || typeof data.roles !== "object" || Array.isArray(data.roles)) throw new Error("Invalid model roles response");
+        setRoles(data.roles);
+        setRolesLoaded(true);
+      })
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setLoading(false));
   }, []);
 
   const save = async () => {
+    if (!rolesLoaded) return;
     setSaving(true);
     setError(null);
     try {
@@ -428,11 +782,7 @@ function ModelRolesDetail({ models }: { models: RuntimeModelEntry[] }) {
           const model = models.find((item) => `${item.provider}/${item.id}` === modelKey);
           const modelKnown = !modelKey || Boolean(model);
           return <>
-            <select aria-label={`Model override for ${role}`} value={modelKey} onChange={(event) => updateRoleModel(role, event.target.value)} style={{ minWidth: 0, padding: "7px 9px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg)", color: "var(--text)", fontSize: 12 }}>
-              <option value="">{t("modelsConfig.noOverride")}</option>
-              {!modelKnown && <option value={modelKey}>{modelKey} (not currently available)</option>}
-              {models.map((item) => <option key={`${item.provider}:${item.id}`} value={`${item.provider}/${item.id}`}>{item.name || item.id} ({item.provider}/{item.id})</option>)}
-            </select>
+            <RoleModelPicker role={role} value={modelKey} models={models} onChange={(k) => updateRoleModel(role, k)} />
             <select aria-label={`Thinking level for ${role}`} value={effort} disabled={!model} onChange={(event) => updateRoleThinking(role, event.target.value)} style={{ minWidth: 0, padding: "7px 9px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg)", color: "var(--text)", fontSize: 12, opacity: model ? 1 : 0.55 }}>
               <option value="">{t("modelsConfig.modelDefault")}</option>
               {(model?.thinkingLevels ?? []).filter((level) => level !== "off").map((level) => <option key={level} value={level}>{level}</option>)}
@@ -454,7 +804,7 @@ function ModelRolesDetail({ models }: { models: RuntimeModelEntry[] }) {
       </div>
     ))}
     {error && <div role="alert" style={{ color: "var(--status-error)", fontSize: 12 }}>{error}</div>}
-    <button type="button" onClick={() => void save()} disabled={loading || saving} style={{ alignSelf: "flex-start", padding: "7px 12px", border: "none", borderRadius: "var(--radius-control)", background: "var(--accent)", color: "var(--on-accent)", cursor: saving ? "wait" : "pointer", fontSize: 12, fontWeight: 600 }}>{saving ? t("modelsConfig.saving") : t("modelsConfig.saveRoles")}</button>
+    <button type="button" onClick={() => void save()} disabled={loading || saving || !rolesLoaded} style={{ alignSelf: "flex-start", padding: "7px 12px", border: "none", borderRadius: "var(--radius-control)", background: "var(--accent)", color: "var(--on-accent)", cursor: saving ? "wait" : "pointer", fontSize: 12, fontWeight: 600 }}>{saving ? t("modelsConfig.saving") : t("modelsConfig.saveRoles")}</button>
   </div>;
 }
 
@@ -1845,7 +2195,7 @@ function AddProviderPicker({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }: { onClose: () => void; onSelectTab?: (tab: SettingsTab) => void; onSaved?: () => void; embedded?: boolean }) {
+export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false, initialSelection = null }: { onClose: () => void; onSelectTab?: (tab: SettingsTab) => void; onSaved?: () => void; embedded?: boolean; initialSelection?: Selection | null }) {
   const { t, tn } = useI18n();
   const isMobile = useIsMobile();
   const [config, setConfig] = useState<ModelsFileData>({ providers: {} });
@@ -1853,7 +2203,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
-  const [selection, setSelection] = useState<Selection | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(() => initialSelection ?? null);
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   const [runtimeModels, setRuntimeModels] = useState<RuntimeModelEntry[]>([]);
@@ -1862,12 +2212,19 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
   const [visibleModelKeys, setVisibleModelKeys] = useState<Set<string> | null>(null);
   const [composerPickerSearch, setComposerPickerSearch] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  useEffect(() => {
+    if (initialSelection) {
+      setSelection(initialSelection);
+    }
+  }, [initialSelection]);
   // Provider name whose catalog picker is open (null = closed).
   const [catalogPicker, setCatalogPicker] = useState<string | null>(null);
   // Set when models.yml is on disk but unparseable: the editor shows the error
   // instead of an empty form, and saving stays blocked so the hand-written file
   // is never overwritten with nothing.
   const [parseError, setParseError] = useState<{ message: string; path?: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [configLoaded, setConfigLoaded] = useState(false);
   // Long provider/model catalogs are intentionally collapsed by default. The
   // two lists have independent persisted state because the custom models.yml
   // editor and the Composer visibility picker serve different jobs.
@@ -1944,22 +2301,34 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
 
   const loadConfig = useCallback(() => {
     setLoading(true);
+    setConfigLoaded(false);
+    setLoadError(null);
     fetch("/api/models-config")
-      .then((r) => r.json())
-      .then((d: ModelsFileData & { parseError?: string; code?: string; path?: string }) => {
+      .then(async (r) => {
+        const d = await r.json() as ModelsFileData & { parseError?: string; error?: string; path?: string };
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         if (d.parseError) {
           setParseError({ message: d.parseError, path: d.path });
-          setConfig({ providers: {} });
           setSelection(null);
           return;
         }
+        if (!d.providers || typeof d.providers !== "object" || Array.isArray(d.providers)) {
+          throw new Error("Invalid models configuration response");
+        }
         setParseError(null);
-        const normalized = d.providers ? d : { ...d, providers: {} };
-        setConfig(normalized);
-        const keys = Object.keys(normalized.providers ?? {});
-        if (keys.length > 0) setSelection({ type: "provider", name: keys[0] });
+        setConfig(d);
+        setConfigLoaded(true);
+        if (initialSelection) {
+          setSelection(initialSelection);
+        } else {
+          const keys = Object.keys(d.providers);
+          setSelection(keys.length > 0 ? { type: "provider", name: keys[0] } : null);
+        }
       })
-      .catch(() => setConfig({ providers: {} }))
+      .catch((error: unknown) => {
+        setLoadError(error instanceof Error ? error.message : String(error));
+        setSelection(null);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -1990,15 +2359,17 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
   }, [visibleModelKeys]);
 
   const setComposerModelVisible = useCallback((model: RuntimeModelEntry, visible: boolean) => {
+    if (runtimeModelsLoading || runtimeModels.length === 0) return;
     setVisibleModelKeys((current) => {
       const next = new Set(current ?? runtimeModels.map((entry) => `${entry.provider}:${entry.id}`));
       const key = `${model.provider}:${model.id}`;
       if (visible) next.add(key); else next.delete(key);
       return next;
     });
-  }, [runtimeModels]);
+  }, [runtimeModels, runtimeModelsLoading]);
 
   const setComposerProviderVisible = useCallback((provider: string, visible: boolean) => {
+    if (runtimeModelsLoading || runtimeModels.length === 0) return;
     setVisibleModelKeys((current) => {
       const next = new Set(current ?? runtimeModels.map((entry) => `${entry.provider}:${entry.id}`));
       for (const model of runtimeModels) {
@@ -2008,7 +2379,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
       }
       return next;
     });
-  }, [runtimeModels]);
+  }, [runtimeModels, runtimeModelsLoading]);
 
 
   const enableConnectedProvider = useCallback(async (provider: string) => {
@@ -2128,7 +2499,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
   }, []);
 
   const handleSave = useCallback(async () => {
-    if (parseError) return;
+    if (loading || !configLoaded || parseError || loadError) return;
     // Last line of defense for the rename-onto-existing-key data loss: even if
     // a rename slipped past the per-field validation, refuse a save whose
     // serialized providers would contain duplicate keys.
@@ -2186,7 +2557,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
     } finally {
       setSaving(false);
     }
-  }, [config, loadApiKeyProviders, loadConfig, loadRuntimeModels, onSaved, parseError, t]);
+  }, [config, configLoaded, loading, loadError, loadApiKeyProviders, loadConfig, loadRuntimeModels, onSaved, parseError, t]);
 
   const providers = Object.entries(config.providers ?? {});
   const activeOAuth = oauthProviders.filter((p) => p.loggedIn);
@@ -2363,7 +2734,12 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
         {!embedded && onSelectTab && <SettingsTabs active="models" onSelect={onSelectTab} />}
 
         {/* Body */}
-        {parseError ? (
+        {loadError ? (
+          <div role="alert" style={{ flex: 1, padding: 24, color: "var(--status-error)" }}>
+            <p>{loadError}</p>
+            <button type="button" onClick={loadConfig} disabled={loading}>{loading ? t("modelsConfig.loading") : t("modelsConfig.reload")}</button>
+          </div>
+        ) : parseError ? (
           <div style={{ flex: 1, overflowY: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--status-error)" }}>{t("modelsConfig.parseErrorTitle")}</div>
             <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>{t("modelsConfig.parseErrorBody")}</div>
@@ -2597,7 +2973,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
           <button onClick={onClose} style={{ padding: "6px 14px", background: "none", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)", cursor: "pointer", fontSize: 13 }}>
             {t("modelsConfig.cancel")}
           </button>
-          <button onClick={handleSave} disabled={saving || savedOk || parseError !== null} style={{
+          <button onClick={handleSave} disabled={loading || !configLoaded || saving || savedOk || parseError !== null || loadError !== null} style={{
             position: "relative",
             padding: "6px 16px",
             minWidth: 92,

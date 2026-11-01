@@ -70,7 +70,7 @@ export function readDisabledProviders(ctx: ProfileContext = defaultProfileContex
  * like `org/model` under a still-live provider is never touched). Writes are
  * skipped when nothing changed so user files stay byte-identical.
  */
-export function pruneConfigProviderRefs(remainingProviders: readonly string[], ctx: ProfileContext = defaultProfileContext()): void {
+export function pruneConfigProviderRefs(remainingProviders: readonly string[], ctx: ProfileContext = defaultProfileContext(), previousProviders: readonly string[] = []): void {
   const path = configPath(ctx);
   if (!existsSync(path)) return;
   const source = readFileSync(path, "utf8");
@@ -80,12 +80,11 @@ export function pruneConfigProviderRefs(remainingProviders: readonly string[], c
   if (!isRecord(data)) return;
 
   const live = new Set(remainingProviders);
+  const removed = new Set(previousProviders.filter((name) => !live.has(name)));
+  if (removed.size === 0) return;
   const refsDeletedProvider = (selector: string): boolean => {
-    if (!selector) return false;
-    const providerPart = selector.split("/")[0];
-    if (!providerPart || live.has(providerPart)) return false;
-    // Bare model selectors without a provider part are omp-inferred — keep.
-    return providerPart !== selector || selector.includes("/");
+    const separator = selector.indexOf("/");
+    return separator > 0 && removed.has(selector.slice(0, separator));
   };
 
   let changed = false;
@@ -119,7 +118,7 @@ export function pruneConfigProviderRefs(remainingProviders: readonly string[], c
   const providers = isRecord(data.providers) ? data.providers : {};
   if (Array.isArray(providers.webSearchOrder) && providers.webSearchOrder.length > 0) {
     const order = providers.webSearchOrder.filter((value): value is string => typeof value === "string");
-    const next = order.filter((name) => live.has(name));
+    const next = order.filter((name) => !removed.has(name));
     if (next.length !== order.length) {
       if (next.length === 0) doc.deleteIn(["providers", "webSearchOrder"]);
       else doc.setIn(["providers", "webSearchOrder"], next);

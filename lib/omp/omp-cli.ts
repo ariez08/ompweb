@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { delimiter, join } from "path";
+import { createChildProcessEnvironment } from "../project-command-env";
 
 /**
  * Locating and probing the user's installed `omp` CLI. omp-web never embeds
@@ -23,6 +24,16 @@ const BIN_CANDIDATES = process.platform === "win32"
 // PATH repaired) while the server runs; a permanently cached "not found" would
 // keep the UI reporting a missing binary until restart.
 const MISS_TTL_MS = 30_000;
+
+const WINDOWS_SCRIPT_RE = /\.cmd$|\.bat$/i;
+
+/** Spawn target for `bin args`, routing Windows script launchers through cmd.exe. */
+export function wrapWindowsScript(bin: string, args: string[]): { file: string; args: string[] } {
+  if (process.platform === "win32" && WINDOWS_SCRIPT_RE.test(bin)) {
+    return { file: "cmd.exe", args: ["/c", bin, ...args] };
+  }
+  return { file: bin, args };
+}
 
 /** Clear probes after an explicit `omp update` so the next request rechecks it. */
 export function invalidateOmpCliCache(): void {
@@ -91,7 +102,7 @@ export async function getOmpVersion(): Promise<string | null> {
   }
   try {
     const output = await new Promise<string>((resolve, reject) => {
-      execFile(bin, ["--version"], { timeout: 10_000, windowsHide: true }, (error, stdout) => {
+      execFile(bin, ["--version"], { timeout: 10_000, windowsHide: true, env: createChildProcessEnvironment() }, (error, stdout) => {
         if (error) reject(error);
         else resolve(stdout);
       });

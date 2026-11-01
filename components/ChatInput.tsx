@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, memo, KeyboardEvent } from "react";
-import { ChevronDown, ListChecks, Search, Shrink, Sparkles, Target, Zap } from "lucide-react";
+import { ChevronDown, ListChecks, Search, Shrink, SlidersHorizontal, Sparkles, Target, Zap } from "lucide-react";
 import { getSubmitDuringRunBehavior } from "@/lib/composer-prefs";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
 import type { ActiveGoal, ActivePlan } from "@/lib/web-mode-state";
@@ -28,6 +28,8 @@ import { selectableThinkingLevels } from "@/lib/thinking-levels";
 
 import { CapabilitiesPicker } from "./CapabilitiesPicker";
 import type { SessionCapabilities } from "@/lib/capabilities-types";
+import { useDictation } from "@/hooks/useDictation";
+import { RecordingDeck } from "./RecordingDeck";
 export interface AttachedImage {
   data: string;   // base64, no prefix
   mimeType: string;
@@ -427,6 +429,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelDropdownRect, setModelDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [modelProviderFilter, setModelProviderFilter] = useState<string>("all");
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>(() => (
@@ -1100,6 +1103,67 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     setAttachError(null);
     clearInput();
   }, [value, attachedImages, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled]);
+
+  // ── Dictation ───────────────────────────────────────────────────────────
+  // The transcript arrives from a server job, so a send/queue chosen before a
+  // session switch (which remounts this composer) still applies.
+  const {
+    isRecording,
+    isPaused,
+    isReviewing,
+    isTranscribing,
+    isPlayingPreview,
+    previewCurrentTime,
+    previewDuration,
+    transcribeError,
+    captureRef,
+    toggle: toggleDictation,
+    cancel: cancelDictation,
+    stop: stopDictation,
+    togglePause: togglePauseDictation,
+    retry: retryDictation,
+    playPreview: playPreviewDictation,
+    pausePreview: pausePreviewDictation,
+    seekPreview: seekPreviewDictation,
+    confirmTranscribe: confirmTranscribeDictation,
+  } = useDictation({
+    scope: draftKey,
+    onTranscript: (text, after) => {
+      const base = valueRef.current;
+      const sep = base.length > 0 && !base.endsWith(" ") ? " " : "";
+      const finalText = base + sep + text;
+      setValue(finalText);
+      setAtQuery(null);
+      setSlashMatch(null);
+      if (!after) {
+        toast.success(t("chatInput.dictationSuccess"));
+        return;
+      }
+      // Queue while the agent runs (Send becomes a follow-up), send when idle.
+      if (isStreaming) {
+        if (onFollowUp) onFollowUp(finalText);
+        else toast.success(t("chatInput.dictationSuccess"));
+        clearInput();
+        return;
+      }
+      onAudioUnlock?.();
+      onSend(finalText);
+      clearInput();
+    },
+    onError: (err) => {
+      // The hook forwards the raw DOMException message ("Permission denied")
+      // for a blocked microphone, so match on the shape, not one exact string.
+      const msg =
+        /not supported/i.test(err) ? t("chatInput.dictationNotSupported")
+        : /denied|NotAllowed|Permission/i.test(err) ? t("chatInput.dictationPermissionDenied")
+        : /no speech detected/i.test(err) ? t("chatInput.dictationNoSpeech")
+        : /timed out/i.test(err) ? t("chatInput.dictationTimedOut")
+        : /transcription failed/i.test(err) ? t("chatInput.dictationFailed")
+        : t("chatInput.dictationFailed");
+      toast.error(msg);
+    },
+  });
+  const dictationDeckOpen = isRecording || isPaused || isReviewing || isTranscribing || Boolean(transcribeError);
   // Stop must stay reachable WHILE a run is active: the primary button is
   // always Stop when streaming (queued follow-ups are still submitted via
   // Enter / the queued-follow-up bar). Previously a typed message replaced
@@ -1420,16 +1484,37 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     [locale, modelOptions, modelSearchQuery],
   );
 
+  const allModelProviders = React.useMemo(() => {
+    const providers = new Set<string>();
+    for (const opt of modelOptions) {
+      if (opt.provider) providers.add(opt.provider);
+    }
+    return Array.from(providers).sort((a, b) => modelCollator.compare(a, b));
+  }, [modelOptions, modelCollator]);
+
+  const providerMatchCounts = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const opt of filteredModelOptions) {
+      counts.set(opt.provider, (counts.get(opt.provider) ?? 0) + 1);
+    }
+    return counts;
+  }, [filteredModelOptions]);
+
+  const displayedModelOptions = React.useMemo(() => {
+    if (modelProviderFilter === "all") return filteredModelOptions;
+    return filteredModelOptions.filter((opt) => opt.provider === modelProviderFilter);
+  }, [filteredModelOptions, modelProviderFilter]);
+
   // Group options by provider, preserving insertion order.
   const modelsByProvider: { provider: string; options: ModelOption[] }[] = React.useMemo(() => {
     const groups: { provider: string; options: ModelOption[] }[] = [];
-    for (const opt of filteredModelOptions) {
+    for (const opt of displayedModelOptions) {
       const group = groups.find((g) => g.provider === opt.provider);
       if (group) group.options.push(opt);
       else groups.push({ provider: opt.provider, options: [opt] });
     }
     return groups;
-  }, [filteredModelOptions]);
+  }, [displayedModelOptions]);
 
   const displayModelName = model
     ? (modelOptions.find((o) => o.modelId === model.modelId && o.provider === model.provider)?.name
@@ -1478,6 +1563,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   useEffect(() => {
     if (!modelDropdownOpen) {
       setModelSearchQuery("");
+      setModelProviderFilter("all");
       return;
     }
     requestAnimationFrame(() => modelSearchInputRef.current?.focus());
@@ -2180,6 +2266,25 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 </defs>
               </svg>
             )}
+          {dictationDeckOpen ? (
+            <RecordingDeck
+              captureRef={captureRef}
+              isPaused={isPaused}
+              isReviewing={isReviewing}
+              isTranscribing={isTranscribing}
+              isPlayingPreview={isPlayingPreview}
+              previewCurrentTime={previewCurrentTime}
+              previewDuration={previewDuration}
+              transcribeError={transcribeError}
+              onPauseResume={togglePauseDictation}
+              onConvert={stopDictation}
+              onRetry={retryDictation}
+              onPlayPreview={isPlayingPreview ? pausePreviewDictation : playPreviewDictation}
+              onSeekPreview={seekPreviewDictation}
+              onConfirmTranscribe={confirmTranscribeDictation}
+              onDiscard={cancelDictation}
+            />
+          ) : (
           <textarea
             ref={textareaRef}
             value={value}
@@ -2232,6 +2337,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               opacity: cliLockPid ? 0.7 : 1,
             }}
           />
+          )}
 
           {/* Toolbar: attachment · advisor · model · settings · reasoning · fast · compact · send/queue/stop */}
 
@@ -2274,6 +2380,42 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <polyline points="14 2 14 8 20 8" />
+              </svg>
+            </button>
+
+            {/* Dictation — starts a server-side transcription job; the deck
+                above replaces the textarea while a capture is active. */}
+            <button
+              type="button"
+              onClick={toggleDictation}
+              disabled={isStreaming || Boolean(cliLockPid)}
+              title={t("chatInput.startDictation")}
+              aria-label={t("chatInput.startDictation")}
+              aria-pressed={isRecording || isPaused}
+              style={{
+                flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                width: 28, height: 28, padding: 0,
+                background: "none", border: "none",
+                borderRadius: 7,
+                color: isRecording || isPaused ? "var(--accent)" : "var(--text-muted)",
+                cursor: isStreaming ? "not-allowed" : "pointer",
+                opacity: isStreaming ? 0.5 : 1,
+                transition: "background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)",
+              }}
+              onMouseEnter={(e) => {
+                if (isStreaming) return;
+                e.currentTarget.style.background = "var(--bg-hover)";
+                e.currentTarget.style.color = "var(--text)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "none";
+                e.currentTarget.style.color = isRecording || isPaused ? "var(--accent)" : "var(--text-muted)";
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="22" />
               </svg>
             </button>
 
@@ -2363,11 +2505,16 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 </button>
                 {modelDropdownOpen && modelDropdownRect && (() => {
                   const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+                  const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
                   const bottom = viewportHeight - modelDropdownRect.top + 6;
-                  const maxH = Math.max(120, Math.min(modelDropdownRect.top - 8, viewportHeight * 0.6));
-                  const panelPos: React.CSSProperties = isMobile
+                  const maxH = Math.max(300, Math.min(modelDropdownRect.top - 8, viewportHeight * 0.7));
+                  const isCompact = isMobile || viewportWidth < 540;
+                  const desiredWidth = 520;
+                  const panelWidth = Math.min(desiredWidth, viewportWidth - 24);
+                  const left = Math.max(12, Math.min(modelDropdownRect.left, viewportWidth - panelWidth - 12));
+                  const panelPos: React.CSSProperties = isCompact
                     ? { left: 8, right: 8, maxWidth: "calc(100vw - 16px)" }
-                    : { left: modelDropdownRect.left, width: "max-content", minWidth: Math.max(modelDropdownRect.width, 360), maxWidth: "calc(100vw - 16px)" };
+                    : { left, width: panelWidth, maxWidth: "calc(100vw - 16px)" };
                   return (
                     <div ref={modelDropdownPanelRef} className="picker-panel" style={{
                       position: "fixed",
@@ -2383,7 +2530,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                           <rect x="9" y="9" width="6" height="6" />
                         </svg>
                         <span className="picker-panel-title">{t("chatInput.modelsLabel")}</span>
-                        <span className="picker-panel-count">{modelOptions.length}</span>
+                        <span className="picker-panel-count">
+                          {modelSearchQuery.trim()
+                            ? `${filteredModelOptions.length} / ${modelOptions.length}`
+                            : modelOptions.length}
+                        </span>
                       </div>
                       <label className="picker-search">
                         <Search size={13} strokeWidth={1.8} color="var(--text-dim)" aria-hidden="true" />
@@ -2404,36 +2555,154 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                           aria-label={t("chatInput.searchModels")}
                         />
                       </label>
-                      <div className="picker-list">
-                        {modelsByProvider.length === 0 ? (
-                          <div style={{ padding: "9px 8px", color: "var(--text-dim)", fontSize: 12, whiteSpace: "nowrap" }}>
-                            {modelSearchQuery.trim() ? t("chatInput.noMatchingModels") : showModelsLoading ? t("chatInput.loadingModels") : t("chatInput.noAvailableModels")}
-                          </div>
-                        ) : modelsByProvider.map((group) => (
-                          <div key={group.provider}>
-                            <div className="picker-group-label">{group.provider}</div>
-                            {group.options.map((opt) => {
-                              const isActive = opt.modelId === model?.modelId && opt.provider === model?.provider;
+                      <div className="picker-body-split">
+                        {/* Left section: All & list per provider */}
+                        <div className="picker-sidebar">
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minHeight: 0, overflowY: "auto" }}>
+                            <button
+                              type="button"
+                              className="picker-sidebar-item"
+                              data-active={modelProviderFilter === "all"}
+                              onClick={() => setModelProviderFilter("all")}
+                            >
+                              <span className="picker-sidebar-name">{t("chatInput.allProviders")}</span>
+                              <span className="picker-sidebar-count">{filteredModelOptions.length}</span>
+                            </button>
+                            {allModelProviders.map((provider) => {
+                              const count = providerMatchCounts.get(provider) ?? 0;
+                              const isSelected = modelProviderFilter === provider;
+                              const isCurrentProvider = model?.provider === provider;
+                              const isDimmed = modelSearchQuery.trim().length > 0 && count === 0;
+
                               return (
                                 <button
-                                  className="picker-row"
-                                  data-active={isActive}
-                                  key={`${opt.provider}:${opt.modelId}`}
-                                  onClick={() => { setModelDropdownOpen(false); if (!isActive || isAutoModelSelection) onModelChange(opt.provider, opt.modelId); }}
-                                  title={`${opt.name} (${opt.modelId})`}
+                                  key={provider}
+                                  type="button"
+                                  className="picker-sidebar-item"
+                                  data-active={isSelected}
+                                  data-dimmed={isDimmed}
+                                  onClick={() => setModelProviderFilter(provider)}
+                                  title={`${provider} (${count})`}
                                 >
-                                  <span className="picker-check">
-                                    {isActive && <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>}
+                                  <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, overflow: "hidden" }}>
+                                    {isCurrentProvider && (
+                                      <span
+                                        style={{
+                                          width: 5,
+                                          height: 5,
+                                          borderRadius: "50%",
+                                          background: "var(--accent)",
+                                          flexShrink: 0,
+                                        }}
+                                        aria-hidden="true"
+                                      />
+                                    )}
+                                    <span className="picker-sidebar-name">{provider}</span>
                                   </span>
-                                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{opt.name}</span>
-                                  {opt.modelId !== opt.name && (
-                                    <span className="picker-row-meta" style={{ fontFamily: "var(--font-mono)" }}>{opt.modelId}</span>
-                                  )}
+                                  <span className="picker-sidebar-count">{count}</span>
                                 </button>
                               );
                             })}
                           </div>
-                        ))}
+                          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: "auto", flexShrink: 0 }}>
+                            <button
+                              type="button"
+                              className="picker-sidebar-item"
+                              onClick={() => {
+                                setModelDropdownOpen(false);
+                                window.dispatchEvent(new CustomEvent("omp-open-settings", {
+                                  detail: { tab: "providers", selection: { type: "roles" } }
+                                }));
+                              }}
+                              title={t("chatInput.modelRoleSettings")}
+                              style={{
+                                color: "var(--accent)",
+                                fontSize: 11,
+                                fontWeight: 500,
+                              }}
+                            >
+                              <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, overflow: "hidden" }}>
+                                <SlidersHorizontal size={12} strokeWidth={1.8} style={{ flexShrink: 0 }} aria-hidden="true" />
+                                <span className="picker-sidebar-name">{t("chatInput.modelRoleSettings")}</span>
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Right section: Models list */}
+                        <div className="picker-list" style={{ flex: 1, minWidth: 0 }}>
+                          {modelsByProvider.length === 0 ? (
+                            <div style={{ padding: "24px 12px", textAlign: "center", color: "var(--text-dim)", fontSize: 12 }}>
+                              <div>
+                                {modelSearchQuery.trim()
+                                  ? t("chatInput.noMatchingModels")
+                                  : showModelsLoading
+                                  ? t("chatInput.loadingModels")
+                                  : t("chatInput.noAvailableModels")}
+                              </div>
+                              {modelProviderFilter !== "all" && filteredModelOptions.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setModelProviderFilter("all")}
+                                  style={{
+                                    marginTop: 8,
+                                    padding: "4px 10px",
+                                    fontSize: 11,
+                                    background: "none",
+                                    border: "1px solid var(--border)",
+                                    borderRadius: 6,
+                                    color: "var(--accent)",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {t("chatInput.showAllMatches", { count: filteredModelOptions.length })}
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            modelsByProvider.map((group) => (
+                              <div key={group.provider}>
+                                <div className="picker-group-label" style={{ display: "flex", justifyContent: "space-between" }}>
+                                  <span>{group.provider}</span>
+                                  <span style={{ fontSize: 9, opacity: 0.6, fontFamily: "var(--font-mono)" }}>
+                                    {group.options.length}
+                                  </span>
+                                </div>
+                                {group.options.map((opt) => {
+                                  const isActive = opt.modelId === model?.modelId && opt.provider === model?.provider;
+                                  return (
+                                    <button
+                                      className="picker-row"
+                                      data-active={isActive}
+                                      key={`${opt.provider}:${opt.modelId}`}
+                                      onClick={() => {
+                                        setModelDropdownOpen(false);
+                                        if (!isActive || isAutoModelSelection) onModelChange(opt.provider, opt.modelId);
+                                      }}
+                                      title={`${opt.name} (${opt.modelId})`}
+                                    >
+                                      <span className="picker-check">
+                                        {isActive && (
+                                          <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <polyline points="1.5 5 4 7.5 8.5 2.5" />
+                                          </svg>
+                                        )}
+                                      </span>
+                                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        {opt.name}
+                                      </span>
+                                      {opt.modelId !== opt.name && (
+                                        <span className="picker-row-meta" style={{ fontFamily: "var(--font-mono)" }}>
+                                          {opt.modelId}
+                                        </span>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ))
+                          )}
+                        </div>
                       </div>
                     </div>
                   );

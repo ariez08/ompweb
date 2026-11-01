@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { resolveOmpBin } from "./omp/omp-cli";
 import { asNumber, isRecord } from "./type-guards";
+import { createChildProcessEnvironment } from "./project-command-env";
 import type {
   ProviderUsageReport,
   ProviderUsageSnapshot,
@@ -163,6 +164,9 @@ async function fetchProviderUsage(): Promise<string> {
     timeout: USAGE_TIMEOUT_MS,
     maxBuffer: USAGE_MAX_BUFFER,
     windowsHide: true,
+    // Without an env option this child inherits the server's full environment,
+    // including omp-web's own password.
+    env: createChildProcessEnvironment(),
   });
   return stdout;
 }

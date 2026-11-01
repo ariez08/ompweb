@@ -208,9 +208,62 @@ function modelRolesRecord(value: unknown): Record<string, string> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+/**
+ * The only keys writeNativeSettings may write, per section — mirroring the
+ * read allowlist in readNativeSettings. Validation below type-checks known
+ * keys but the writer used to loop every key of these sections straight into
+ * the document, so an unvalidated key (e.g. `mcp.evilKey`) persisted into
+ * omp's config.yml. Unknown keys are rejected, never silently written.
+ */
+const SECTION_KEYS: Record<string, readonly string[]> = {
+  advisor: ["enabled", "subagents", "syncBacklog", "immuneTurns"],
+  tools: ["approvalMode", "approval"],
+  retry: ["enabled", "maxRetries", "modelFallback", "fallbackRevertPolicy", "fallbackChains"],
+  compaction: ["enabled", "midTurnEnabled", "strategy", "autoContinue", "remoteEnabled", "keepRecentTokens"],
+  memory: ["backend"],
+  autolearn: ["enabled", "autoContinue", "minToolCalls"],
+  mnemopi: ["scoping", "autoRecall", "autoRetain", "noEmbeddings"],
+  mcp: ["enableProjectConfig", "renderMarkdownResults", "notifications", "notificationDebounceMs"],
+  generateImage: ["enabled"],
+  computer: ["enabled"],
+  skills: ["enableCodexUser", "enableAgentsUser", "enableClaudeUser", "enableClaudeProject"],
+  bash: ["autoBackground"],
+  providers: ["memoryModel", "webSearchOrder"],
+  security: ["enabled"],
+  github: ["enabled"],
+  contextPromotion: ["enabled"],
+  snapcompact: ["toolResults"],
+  edit: ["mode"],
+  composer: ["shape"],
+  dev: ["autoqaConsent"],
+};
+
+/** Top-level keys the writer owns; anything else is not omp-web's to persist. */
+const TOP_LEVEL_KEYS: readonly string[] = [
+  "defaultThinkingLevel", "hideThinkingBlock", "externalThinking", "textVerbosity",
+  "personality", "enabledModels", "disabledProviders", "modelProviderOrder",
+  "modelRoles", "colorBlindMode", "symbolPreset", "registryHasScopedEntries", ...Object.keys(SECTION_KEYS),
+];
+
+function assertKnownKeys(settings: NativeSettings): void {
+  const topLevel = new Set(TOP_LEVEL_KEYS);
+  for (const key of Object.keys(settings)) {
+    if (!topLevel.has(key)) throw new Error(`Unsupported setting: ${key}`);
+  }
+  for (const [section, allowedKeys] of Object.entries(SECTION_KEYS)) {
+    const value = (settings as Record<string, unknown>)[section];
+    if (!isRecord(value)) continue;
+    const allowed = new Set(allowedKeys);
+    for (const key of Object.keys(value)) {
+      if (!allowed.has(key)) throw new Error(`Unsupported ${section} setting: ${key}`);
+    }
+  }
+}
+
 /** Validates and applies a reviewed subset of OMP's global config schema. */
 export function writeNativeSettings(settings: NativeSettings, ctx: ProfileContext = defaultProfileContext()): void {
   if (!isRecord(settings)) throw new Error("Settings must be an object");
+  assertKnownKeys(settings);
   assertOptionalRecord(settings.advisor, "advisor");
   assertOptionalRecord(settings.tools, "tools");
   assertOptionalRecord(settings.tools?.approval, "tools.approval");
@@ -309,7 +362,7 @@ export function writeNativeSettings(settings: NativeSettings, ctx: ProfileContex
     // The YAML key differs from the settings name for one field; map it
     // before serializing so the very first write matches OMP's schema.
     // nulls mean "delete" and cannot exist in an empty document — drop them.
-    const { generateImage, ...rest } = settings;
+    const { generateImage, registryHasScopedEntries: _registryHasScopedEntries, ...rest } = settings;
     const mapped: Record<string, unknown> = { ...rest, ...(generateImage !== undefined ? { generate_image: generateImage } : {}) };
     for (const key of Object.keys(mapped)) {
       if (mapped[key] === null || mapped[key] === undefined) delete mapped[key];

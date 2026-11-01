@@ -5,7 +5,9 @@ import { pruneConfigProviderRefs } from "@/lib/omp/model-roles";
 import { disposeUtilityRpc } from "@/lib/omp/rpc-utility";
 import {
   ModelsConfigParseError,
+  maskModelsConfigApiKeys,
   readModelsConfigFile,
+  restoreModelsConfigApiKeys,
   validateModelsConfig,
   writeModelsConfig,
   type ModelsFileConfig,
@@ -27,7 +29,9 @@ export async function GET(request: Request) {
       code: "models_config_unparseable",
     }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   }
-  return NextResponse.json(file.config, { headers: { ...PROFILE_SCOPED_HEADERS } });
+  // Never emit a real key: the file API denies models.yml outright, so this
+  // route is the only reader and must redact what it returns.
+  return NextResponse.json(maskModelsConfigApiKeys(file.config), { headers: { ...PROFILE_SCOPED_HEADERS } });
 }
 
 // PUT /api/models-config[?overwrite=true]
@@ -37,13 +41,24 @@ export async function PUT(req: Request) {
   try {
     const overwriteUnparseable = new URL(req.url).searchParams.get("overwrite") === "true";
     const body = await req.json() as ModelsFileConfig;
+    // The editor echoes masked keys back on every save; restore the stored key
+    // for those, so an unrelated edit never wipes (or leaks, then re-saves) a
+    // credential, and a placeholder is never written to disk.
+    const stored = readModelsConfigFile(ctx);
+    if (!body || !body.providers || typeof body.providers !== "object" || Array.isArray(body.providers)) {
+      return NextResponse.json({ error: "Providers must be a mapping" }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
+    }
+    if (!stored.parseError && Object.keys(stored.config.providers ?? {}).length > 0 && Object.keys(body.providers).length === 0) {
+      return NextResponse.json({ error: "Refusing to replace existing providers with an empty configuration", code: "models_config_empty" }, { status: 409, headers: { ...PROFILE_SCOPED_HEADERS } });
+    }
+    const restored = restoreModelsConfigApiKeys(body, stored.parseError ? { providers: {} } : stored.config);
     try {
-      validateModelsConfig(body);
+      validateModelsConfig(restored);
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } });
     }
     try {
-      writeModelsConfig(body, { overwriteUnparseable }, ctx);
+      writeModelsConfig(restored, { overwriteUnparseable }, ctx);
     } catch (error) {
       if (error instanceof ModelsConfigParseError) {
         return NextResponse.json(
@@ -57,7 +72,7 @@ export async function PUT(req: Request) {
     // (model roles, fallback chains, webSearchOrder) — otherwise omp keeps
     // resolving the deleted provider to a random/unusable model, which reads
     // as "the CLI did not sync the deletion".
-    pruneConfigProviderRefs(Object.keys(body.providers ?? {}), ctx);
+    pruneConfigProviderRefs(Object.keys(body.providers), ctx, Object.keys(stored.config.providers ?? {}));
     invalidateModelsCache();
     // The utility process loads models.yml once at startup. A cache flush alone
     // would still query that stale registry after a provider was added.

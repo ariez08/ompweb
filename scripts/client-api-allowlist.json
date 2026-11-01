@@ -23,7 +23,7 @@
     "components/ProfileManager.tsx": 6,
     "components/ProfileSwitcher.tsx": 2,
     "components/RemoteAccessSetting.tsx": 7,
-    "components/SessionSidebar.tsx": 22,
+    "components/SessionSidebar.tsx": 23,
     "components/SettingsConfig.tsx": 6,
     "components/SkillsConfig.tsx": 6,
     "components/SubagentTranscriptDialog.tsx": 2,
@@ -34,6 +34,7 @@
     "components/usage/UsageDashboardModal.tsx": 2,
     "components/usage/UsageTabLogs.tsx": 1,
     "hooks/useAgentSession.ts": 17,
+    "hooks/useDictation.ts": 6,
     "lib/agent-client.ts": 1,
     "lib/client/http-sse-adapter.ts": 3,
     "lib/workbench-client.ts": 3

@@ -39,6 +39,7 @@ import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo, GenerationSpeedInfo } from "@/lib/pi-types";
 import type { SubagentInfo } from "@/hooks/useAgentSession";
 import type { SettingsTab } from "./SettingsTabs";
+import type { Selection } from "./ModelsConfig";
 import { SettingsConfig } from "./SettingsConfig";
 import { ArchiveBrowser } from "./ArchiveBrowser";
 import { GitHubStatusPanel } from "./GitHubStatusPanel";
@@ -173,6 +174,7 @@ export function AppShell() {
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [explorerRefreshing, setExplorerRefreshing] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  const [settingsModelsSelection, setSettingsModelsSelection] = useState<Selection | null>(null);
   const [archiveBrowserOpen, setArchiveBrowserOpen] = useState(false);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -184,6 +186,19 @@ export function AppShell() {
   const [toolCallsDefaultCollapsed, setToolCallsDefaultCollapsed] = useState(true);
   const [thinkingDisplayMode, setThinkingDisplayMode] = useState<ThinkingDisplayMode>("auto");
   const [sidebarResizing, setSidebarResizing] = useState(false);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const custom = e as CustomEvent<{ tab?: SettingsTab; selection?: Selection }>;
+      if (custom.detail?.selection) {
+        setSettingsModelsSelection(custom.detail.selection);
+      } else {
+        setSettingsModelsSelection(null);
+      }
+      setSettingsTab(custom.detail?.tab ?? "general");
+    };
+    window.addEventListener("omp-open-settings", handler);
+    return () => window.removeEventListener("omp-open-settings", handler);
+  }, []);
   // Quick-script "run in terminal": { text, nonce } bumps trigger the terminal
   // to type the command + Enter once the panel session is live.
   const [terminalRunCommand, setTerminalRunCommand] = useState<{ text: string; nonce: number } | null>(null);
@@ -1201,11 +1216,15 @@ export function AppShell() {
 
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
-    window.open(
-      `/api/sessions/${encodeURIComponent(selectedSession.id)}/export?inline=1`,
-      "_blank",
-      "noopener,noreferrer",
-    );
+    // Exports are always served as attachments (stored-XSS hardening: omp
+    // embeds transcript HTML unescaped), so download the file instead of
+    // opening it in a tab.
+    const link = document.createElement("a");
+    link.href = `/api/sessions/${encodeURIComponent(selectedSession.id)}/export`;
+    link.download = "";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }, [selectedSession]);
 
   // A project selection is not an intent to start a conversation. Only an
@@ -2275,7 +2294,7 @@ export function AppShell() {
     {updateNoticeVersion && (
       <UpdateNoticeDialog version={updateNoticeVersion} onClose={() => setUpdateNoticeVersion(null)} />
     )}
-    {settingsTab && <SettingsConfig activeTab={settingsTab} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} onToolCallsDefaultCollapsedChange={handleToolCallsDefaultCollapsedChange} thinkingDisplayMode={thinkingDisplayMode} onThinkingDisplayModeChange={handleThinkingDisplayModeChange} cwd={activeCwd ?? selectedSession?.cwd ?? newSessionCwd} sessionId={selectedSession?.id ?? null} onModelsSaved={() => setModelsRefreshKey((k) => k + 1)} onPluginsReloaded={() => setSessionKey((k) => k + 1)} onOmpUpdateAvailabilityChange={setOmpUpdateAvailable} onSelectTab={setSettingsTab} onClose={() => setSettingsTab(null)} />}
+    {settingsTab && <SettingsConfig activeTab={settingsTab} initialSelection={settingsModelsSelection} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} onToolCallsDefaultCollapsedChange={handleToolCallsDefaultCollapsedChange} thinkingDisplayMode={thinkingDisplayMode} onThinkingDisplayModeChange={handleThinkingDisplayModeChange} cwd={activeCwd ?? selectedSession?.cwd ?? newSessionCwd} sessionId={selectedSession?.id ?? null} onModelsSaved={() => setModelsRefreshKey((k) => k + 1)} onPluginsReloaded={() => setSessionKey((k) => k + 1)} onOmpUpdateAvailabilityChange={setOmpUpdateAvailable} onSelectTab={setSettingsTab} onClose={() => { setSettingsTab(null); setSettingsModelsSelection(null); }} />}
     <UsageDashboardModal
       open={usageDashboardOpen}
       onOpenChange={setUsageDashboardOpen}

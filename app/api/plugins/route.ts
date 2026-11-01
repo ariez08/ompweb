@@ -4,6 +4,7 @@ import { existsSync, promises as fs } from "fs";
 import { basename, extname, join } from "path";
 import { resolveOmpBin } from "@/lib/omp/omp-cli";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { createChildProcessEnvironment } from "@/lib/project-command-env";
 import type {
   PluginDiagnostic,
   PluginPackageInfo,
@@ -82,7 +83,7 @@ function runOmp(
         cwd: opts.cwd,
         timeout: opts.timeout ?? 60_000,
         maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+        env: createChildProcessEnvironment({ FORCE_COLOR: "0", NO_COLOR: "1" }),
         windowsHide: true,
       },
       (error, stdout, stderr) => {
@@ -306,6 +307,12 @@ export async function POST(req: Request) {
     }
 
     const source = body.source?.trim();
+    // A source starting with "-" would be parsed as CLI options by
+    // `omp plugin …` instead of a plugin name (e.g. `--scope` consuming the
+    // following `--json` as its value).
+    if (source?.startsWith("-")) {
+      return NextResponse.json({ error: "Invalid plugin source", code: "plugin_source_invalid" }, { status: 400 });
+    }
     const scopeArgs = readScope(body.scope) === "project" ? ["--scope", "project"] : [];
 
     if (body.action === "install") {

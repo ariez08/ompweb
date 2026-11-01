@@ -15,6 +15,7 @@ import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { clearLastOpenSession, getLastOpenSession, setLastOpenSession, workspaceKeyOf } from "@/lib/workspace-memory";
 import { groupSessionsByProject, projectActivityCounts, sortManagedProjects } from "@/lib/project-ordering";
 import { comparableProjectPath } from "@/lib/comparable-path";
+import { compileSearchQuery, FIRST_MESSAGE_WEIGHT, scoreSearchFields, searchField, TITLE_WEIGHT } from "@/lib/session-search";
 import { Archive, Check, ChevronDown, ChevronRight, FileUp, Folder, FolderSearch, GitBranch, LoaderCircle, MoreHorizontal, PanelsTopLeft, Play, Plus, RefreshCw, Rocket, Search, Settings2, SlidersHorizontal, Smartphone, Trash2, Upload, Wrench } from "lucide-react";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
 import { UsageSidebarPanel } from "./UsageSidebarPanel";
@@ -627,7 +628,7 @@ interface SessionTreeNode {
   children: SessionTreeNode[];
 }
 
-function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
+function buildSessionTree(sessions: SessionInfo[], scores?: Map<string, number>): SessionTreeNode[] {
   const byId = new Map<string, SessionTreeNode>();
   for (const s of sessions) {
     byId.set(s.id, { session: s, children: [] });
@@ -662,9 +663,10 @@ function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
     }
   }
 
-  // Sort each level by modified desc
+  // Best match first while a search is active; otherwise newest first.
+  const scoreOf = (node: SessionTreeNode) => scores?.get(node.session.id) ?? 0;
   const sort = (nodes: SessionTreeNode[]) => {
-    nodes.sort((a, b) => b.session.modified.localeCompare(a.session.modified));
+    nodes.sort((a, b) => (scoreOf(b) - scoreOf(a)) || b.session.modified.localeCompare(a.session.modified));
     nodes.forEach((n) => sort(n.children));
   };
   sort(roots);
@@ -836,6 +838,9 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [runningOnly, setRunningOnly] = useState(false);
+  // Transcript matches come from a streamed server scan: title hits land
+  // instantly, body hits follow as batches arrive.
+  const [transcriptSearch, setTranscriptSearch] = useState<{ query: string; scores: Record<string, number> } | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Once the SSE stream has delivered a frame it is the source of truth for
@@ -1348,27 +1353,102 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
   // visibleProjectEntries filter runs at lower priority. Combines with the 200ms ETag loadSessions
   // debounce already in place — keystrokes never block the main thread on large session lists.
   const deferredSearchQuery = useDeferredValue(searchQuery);
-  const filtersActive = searchOpen || runningOnly || deferredSearchQuery.trim().length > 0;
+  const trimmedSearchQuery = deferredSearchQuery.trim();
+  const filtersActive = searchOpen || runningOnly || trimmedSearchQuery.length > 0;
+  const currentTranscriptSearch = transcriptSearch?.query === trimmedSearchQuery ? transcriptSearch : null;
+  // Stream transcript matches for the query; title hits are scored locally so
+  // results appear before the server's first batch.
+  useEffect(() => {
+    if (!trimmedSearchQuery) return;
+    const query = trimmedSearchQuery;
+    const controller = new AbortController();
+    let superseded = false;
+    const timer = setTimeout(async () => {
+      setTranscriptSearch({ query, scores: {} });
+      // Each merge re-ranks every session; merge streamed batches at most every 200ms.
+      let pending: Record<string, number> = {};
+      let lastFlush = 0;
+      const flush = () => {
+        if (Object.keys(pending).length === 0) return;
+        const batch = pending;
+        pending = {};
+        lastFlush = Date.now();
+        setTranscriptSearch((prev) => (prev?.query === query ? { query, scores: { ...prev.scores, ...batch } } : prev));
+      };
+      try {
+        const res = await fetch(`/api/sessions/search?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffered = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffered += decoder.decode(value, { stream: true });
+          const lines = buffered.split("\n");
+          buffered = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line) continue;
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if (!parsed || typeof parsed !== "object" || !("scores" in parsed)) continue;
+            const scores = parsed.scores;
+            if (!scores || typeof scores !== "object") continue;
+            for (const [id, score] of Object.entries(scores)) if (typeof score === "number") pending[id] = score;
+          }
+          if (Date.now() - lastFlush >= 200) flush();
+        }
+      } catch {
+        // Stopped, superseded or failed: the title matches and hits so far stay.
+      }
+      if (superseded) return;
+      flush();
+    }, 250);
+    return () => {
+      superseded = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [trimmedSearchQuery]);
   const visibleProjectEntries = useMemo(() => {
-    const q = deferredSearchQuery.trim().toLowerCase();
-    const entries: { project: ManagedProject; sessions: SessionInfo[] }[] = [];
+    const query = compileSearchQuery(trimmedSearchQuery);
+    const serverScores = currentTranscriptSearch?.scores;
+    const entries: { project: ManagedProject; sessions: SessionInfo[]; scores?: Map<string, number>; rank: number }[] = [];
     for (const project of sortedProjects) {
       let list = sessionsByProject.get(project.path) ?? [];
       if (runningOnly) list = list.filter((s) => runningSessionIds.has(s.id));
-      if (q) {
-        list = list.filter((s) => (s.name ?? "").toLowerCase().includes(q) || s.firstMessage.toLowerCase().includes(q));
+      if (!query) {
+        if (list.length === 0 && runningOnly) continue;
+        entries.push({ project, sessions: list, rank: 0 });
+        continue;
       }
+      const scores = new Map<string, number>();
+      for (const s of list) {
+        // Server scores cover the same title fields plus the transcript; a
+        // session newer than the server's answer falls back to its title.
+        const score = serverScores?.[s.id]
+          ?? scoreSearchFields([searchField(s.name ?? "", TITLE_WEIGHT), searchField(s.firstMessage, FIRST_MESSAGE_WEIGHT)], query);
+        if (score !== null) scores.set(s.id, score);
+      }
+      list = list.filter((s) => scores.has(s.id));
       // Label/alias-only matches surface as empty workspaces; without this
       // clause a custom workspace name would be unfindable by search.
-      if (list.length === 0 && (runningOnly || (q && !projectLabel(project.path).toLowerCase().includes(q) && !(project.alias ?? "").toLowerCase().includes(q)))) continue;
-      entries.push({ project, sessions: list });
+      const labelScore = scoreSearchFields([searchField(projectLabel(project.path), TITLE_WEIGHT), searchField(project.alias ?? "", TITLE_WEIGHT)], query);
+      if (list.length === 0 && (runningOnly || labelScore === null)) continue;
+      entries.push({ project, sessions: list, scores, rank: Math.max(labelScore ?? 0, ...scores.values()) });
     }
+    // Best match first; ties keep the workspace order (stable sort).
+    if (query) entries.sort((a, b) => b.rank - a.rank);
     return entries;
-  }, [sortedProjects, sessionsByProject, runningOnly, deferredSearchQuery, runningSessionIds]);
+  }, [sortedProjects, sessionsByProject, runningOnly, trimmedSearchQuery, currentTranscriptSearch, runningSessionIds]);
 
   const treesByProject = useMemo(() => {
-    const m = new Map<string, ReturnType<typeof buildSessionTree>>();
-    for (const { project, sessions } of visibleProjectEntries) m.set(project.path, buildSessionTree(sessions));
+    const m = new Map<string, SessionTreeNode[]>();
+    for (const { project, sessions, scores } of visibleProjectEntries) m.set(project.path, buildSessionTree(sessions, scores));
     return m;
   }, [visibleProjectEntries]);
 
@@ -2093,8 +2173,8 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
             </div>
           )}
 
-          {visibleProjectEntries.map(({ project, sessions }) => {
-            const tree = treesByProject.get(project.path) ?? buildSessionTree(sessions);
+          {visibleProjectEntries.map(({ project, sessions, scores }) => {
+            const tree = treesByProject.get(project.path) ?? buildSessionTree(sessions, scores);
             // Sessions group under a project through the case-folded comparable
             // form (see groupSessionsByProject), so the active highlight must
             // use the same comparison: a session whose cwd/projectRoot spells
