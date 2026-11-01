@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/lib/i18n";
 import { isSafeExternalUrl } from "@/lib/safe-url";
@@ -500,7 +501,7 @@ function RoleModelPicker({
         <ChevronDown size={12} strokeWidth={1.8} style={{ flexShrink: 0, opacity: 0.7 }} aria-hidden="true" />
       </button>
 
-      {open && rect && (() => {
+      {open && rect && typeof document !== "undefined" && createPortal((() => {
         const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
         const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
         const width = Math.min(520, viewportWidth - 24);
@@ -524,7 +525,7 @@ function RoleModelPicker({
               width,
               maxWidth: "calc(100vw - 24px)",
               maxHeight: maxH,
-              zIndex: 1002,
+              zIndex: 2005,
               display: "flex",
               flexDirection: "column",
             }}
@@ -699,7 +700,7 @@ function RoleModelPicker({
             </div>
           </div>
         );
-      })()}
+      })(), document.body)}
     </div>
   );
 }
