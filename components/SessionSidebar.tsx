@@ -54,6 +54,7 @@ interface Props {
   /** Opens the app settings (pinned sidebar footer row). */
   onOpenSettings?: () => void;
   onOpenRemote?: () => void;
+  onOpenProfileManager?: () => void;
   /** True when an omp/ompweb update is available — shows a badge on the gear. */
   updateAvailable?: boolean;
   /** Opens the archived sessions browser. */
@@ -779,7 +780,7 @@ function OmpWebTitle() {
     </button>
   );
 }
-export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, explorerRefreshing, onExplorerRefreshDone, onAtMention, onAtMentions, onOpenSettings, onOpenRemote, onOpenArchive, updateAvailable, onRunScriptInTerminal, onProfileChange }: Props) {
+export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, explorerRefreshing, onExplorerRefreshDone, onAtMention, onAtMentions, onOpenSettings, onOpenProfileManager, onOpenRemote, onOpenArchive, updateAvailable, onRunScriptInTerminal, onProfileChange }: Props) {
   const { t, locale } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2323,7 +2324,7 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
 
       {/* Pinned footer: Usage panel + Settings */}
       <UsageSidebarPanel />
-      <ProfileSwitcher onProfileChange={handleProfileSwitched} onProfileReady={handleProfileReady} />
+      <ProfileSwitcher onProfileChange={handleProfileSwitched} onProfileReady={handleProfileReady} onOpenProfileManager={onOpenProfileManager} />
       <div style={{ borderTop: "1px solid var(--border)", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center" }}>
         <button

@@ -88,8 +88,11 @@
     ]
   },
   "components": {
+    "components/agents/SubagentCard.tsx": {
+      "inlineTransitions": 2
+    },
     "components/AppShell.tsx": {
-      "inlineTransitions": 5,
+      "inlineTransitions": 8,
       "inlineAnimations": [
         "session-info-pop",
         "session-info-light-wash",
@@ -110,7 +113,10 @@
       "inlineTransitions": 1
     },
     "components/BranchNavigator.tsx": {
-      "inlineTransitions": 2
+      "inlineTransitions": 4
+    },
+    "components/CapabilitiesPicker.tsx": {
+      "inlineTransitions": 1
     },
     "components/ChatInput.tsx": {
       "inlineTransitions": 17
@@ -160,6 +166,15 @@
         "state"
       ]
     },
+    "components/panels/ResizeHandles.tsx": {
+      "inlineTransitions": 1
+    },
+    "components/panels/RightPanelTabs.tsx": {
+      "inlineTransitions": 1
+    },
+    "components/panels/RightWorkbench.tsx": {
+      "inlineTransitions": 2
+    },
     "components/PluginsConfig.tsx": {
       "inlineTransitions": 2
     },
@@ -192,32 +207,8 @@
     "components/TodoList.tsx": {
       "inlineTransitions": 1
     },
-    "components/UsageSidebarPanel.tsx": {
-      "inlineTransitions": 1
-    },
-    "components/agents/SubagentCard.tsx": {
-      "inlineTransitions": 2
-    },
-    "components/panels/ResizeHandles.tsx": {
-      "inlineTransitions": 1
-    },
-    "components/panels/RightPanelTabs.tsx": {
-      "inlineTransitions": 1
-    },
-    "components/panels/RightWorkbench.tsx": {
-      "inlineTransitions": 2
-    },
     "components/ui/field.tsx": {
       "inlineTransitions": 2
-    },
-    "components/usage/UsageDashboardModal.tsx": {
-      "inlineTransitions": 2
-    },
-    "components/usage/UsageTabLogs.tsx": {
-      "inlineTransitions": 4
-    },
-    "components/usage/UsageTabModels.tsx": {
-      "inlineTransitions": 1
     },
     "components/usage/charts/CountUpNumber.tsx": {
       "inlineTransitions": 0,
@@ -234,6 +225,18 @@
     "components/usage/charts/SvgStackedBarChart.tsx": {
       "inlineTransitions": 2,
       "reducedMotionHook": true
+    },
+    "components/usage/UsageDashboardModal.tsx": {
+      "inlineTransitions": 2
+    },
+    "components/usage/UsageTabLogs.tsx": {
+      "inlineTransitions": 4
+    },
+    "components/usage/UsageTabModels.tsx": {
+      "inlineTransitions": 1
+    },
+    "components/UsageSidebarPanel.tsx": {
+      "inlineTransitions": 1
     },
     "hooks/useAgentSession.ts": {
       "inlineTransitions": 0,

@@ -603,6 +603,16 @@ export function hostFor(keyOrCtx: string | ProfileContext = "default"): RustHost
   return manager;
 }
 
+export async function disposeHostFor(keyOrCtx: string | ProfileContext): Promise<void> {
+  const key = typeof keyOrCtx === "string" ? keyOrCtx : keyOrCtx.key;
+  const map = getHostsMap();
+  const manager = map.get(key);
+  if (manager) {
+    map.delete(key);
+    await manager.shutdown();
+  }
+}
+
 export const hostManager = hostFor("default");
 export class RustRpcProcess {
   readonly cwd: string;

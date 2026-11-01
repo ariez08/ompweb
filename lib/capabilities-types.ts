@@ -2,7 +2,7 @@
  * Types and presets for OMP capabilities (tools, MCP, skills) control.
  */
 
-export type CapabilityPreset = "chat_only" | "code_editor" | "full_agent" | "custom";
+export type CapabilityPreset = "chat_only" | "code_editor" | "full_agent" | "custom" | string;
 
 export interface SessionCapabilities {
   preset: CapabilityPreset;
@@ -12,7 +12,34 @@ export interface SessionCapabilities {
   skills?: string[];
   /** MCP server names to disable (e.g. ["manage_omp", "gitlab_repo_simrskartini"]). */
   disabledMcp?: string[];
+  /** Human-readable name if this is a custom saved preset */
+  customPresetName?: string;
 }
+
+export interface CustomPresetDefinition {
+  id: string;
+  name: string;
+  description?: string;
+  tools?: string[];
+  skills?: string[];
+  disabledMcp?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export const BUILTIN_TOOLS: readonly WorkspaceCapabilityItem[] = [
+  { id: "read", name: "Read", description: "Read files, web pages, images, and databases", category: "builtin_tool" },
+  { id: "edit", name: "Edit", description: "Precision patch existing files", category: "builtin_tool" },
+  { id: "write", name: "Write", description: "Create or replace whole files", category: "builtin_tool" },
+  { id: "bash", name: "Bash", description: "Run shell commands and processes", category: "builtin_tool" },
+  { id: "glob", name: "Glob", description: "Find files and directory trees by pattern", category: "builtin_tool" },
+  { id: "grep", name: "Grep", description: "Regex text search across repository files", category: "builtin_tool" },
+  { id: "ask", name: "Ask", description: "Ask clarification questions to the user", category: "builtin_tool" },
+  { id: "todo", name: "Todo", description: "Multi-step task progress ledger", category: "builtin_tool" },
+  { id: "task", name: "Task", description: "Spawn concurrent subagent workers", category: "builtin_tool" },
+  { id: "eval", name: "Eval", description: "Execute Python / Bun in a persistent kernel", category: "builtin_tool" },
+  { id: "wait", name: "Wait", description: "Wait for background tasks to settle", category: "builtin_tool" },
+] as const;
 
 export interface WorkspaceCapabilityItem {
   id: string;
@@ -27,6 +54,7 @@ export interface WorkspaceCapabilitiesCatalog {
   mcpServers: { name: string; status?: string }[];
   skills: WorkspaceCapabilityItem[];
   defaultCapabilities: SessionCapabilities;
+  customPresets?: CustomPresetDefinition[];
 }
 
 /** Pre-configured tool combinations for quick selection. */

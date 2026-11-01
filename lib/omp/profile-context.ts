@@ -94,7 +94,7 @@ export function defaultProfileContext(): ProfileContext {
 }
 
 /** The `~/.omp/profiles` root for the current PI_CONFIG_DIR layout. */
-function profilesRoot(): string {
+export function profilesRoot(): string {
   // Config root with no profile applied, so the lookup itself is profile-free.
   return path.join(getConfigRoot({ ...envScope(), ompProfile: "", piProfile: "" }), "profiles");
 }

@@ -155,6 +155,7 @@ export function buildSessionSpawnArgs(
   toolNames?: string[],
   advisor = false,
   skillPatterns?: string[],
+  disabledMcp?: string[],
 ): string[] {
   const args: string[] = [];
   if (sessionFile) {
@@ -183,6 +184,9 @@ export function buildSessionSpawnArgs(
     }
   }
   if (advisor) args.push("--advisor");
+  if (disabledMcp && disabledMcp.length > 0) {
+    // When all discovered MCP are disabled or explicitly listed
+  }
   return args;
 }
 
@@ -300,6 +304,7 @@ export class AgentSessionWrapper {
   // runnable under Node's strip-only TypeScript mode for probes/tests.
   toolNames?: string[];
   skillPatterns?: string[];
+  disabledMcp?: string[];
 
   constructor(
     proc: RpcProcessLike,
@@ -309,6 +314,7 @@ export class AgentSessionWrapper {
     ctx: ProfileContext = defaultProfileContext(),
     toolNames?: string[],
     skillPatterns?: string[],
+    disabledMcp?: string[],
   ) {
     this.proc = proc;
     this.cwd = cwd;
@@ -317,6 +323,7 @@ export class AgentSessionWrapper {
     this.ctx = ctx;
     this.toolNames = toolNames;
     this.skillPatterns = skillPatterns;
+    this.disabledMcp = disabledMcp;
   }
 
   get sessionId(): string {
@@ -959,7 +966,7 @@ export class AgentSessionWrapper {
         proc = await createRpcProcess({
           cwd: this.cwd,
           sessionId: this.sessionId,
-          extraArgs: buildSessionSpawnArgs(resumable ? sessionFile : "", this.toolNames, this.advisorSpawned, this.skillPatterns),
+          extraArgs: buildSessionSpawnArgs(resumable ? sessionFile : "", this.toolNames, this.advisorSpawned, this.skillPatterns, this.disabledMcp),
           onExit: ({ stderrTail }) => {
             if (this.proc === proc) this.handleProcessExit(stderrTail);
           },
@@ -998,9 +1005,10 @@ export class AgentSessionWrapper {
     }
     notifyRunningChange();
   }
-  async updateCapabilities(options: { toolNames?: string[]; skillPatterns?: string[] }): Promise<void> {
+  async updateCapabilities(options: { toolNames?: string[]; skillPatterns?: string[]; disabledMcp?: string[] }): Promise<void> {
     this.toolNames = options.toolNames;
     this.skillPatterns = options.skillPatterns;
+    this.disabledMcp = options.disabledMcp;
     if (!this.isRunning()) {
       await this.restart();
     }
@@ -1488,6 +1496,7 @@ export async function startRpcSession(
   recordedCwd?: string | null,
   ctx: ProfileContext = defaultProfileContext(),
   skillPatterns?: string[],
+  disabledMcp?: string[],
 ): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
   const registry = getRegistry();
   const locks = getLocks();
@@ -1522,7 +1531,7 @@ export async function startRpcSession(
       proc = await createRpcProcess({
         cwd,
         sessionId: sessionId ?? `session-${Math.random().toString(36).slice(2, 10)}`,
-        extraArgs: buildSessionSpawnArgs(sessionFile, toolNames, advisor === true, skillPatterns),
+        extraArgs: buildSessionSpawnArgs(sessionFile, toolNames, advisor === true, skillPatterns, disabledMcp),
         onExit: ({ stderrTail }) => holder.wrapper?.handleProcessExit(stderrTail),
         ctx,
       });
@@ -1534,7 +1543,7 @@ export async function startRpcSession(
       }
       throw error;
     }
-    const created = new AgentSessionWrapper(proc, cwd, recordedCwd, advisor === true, ctx, toolNames, skillPatterns);
+    const created = new AgentSessionWrapper(proc, cwd, recordedCwd, advisor === true, ctx, toolNames, skillPatterns, disabledMcp);
     holder.wrapper = created;
     created.start();
     try {

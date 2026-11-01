@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { listAllSessionInfos } from "@/lib/omp/session-files";
 import { readModelsConfigFile } from "@/lib/omp/models-config";
 import { allProfileContexts, defaultProfileContext, type ProfileContext } from "@/lib/omp/profile-context";
+import { createProfile, type ProfileComponentsSelection } from "@/lib/omp/profile-manager";
 import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
@@ -63,7 +64,7 @@ export async function GET(request: Request) {
   const toCount = withCounts
     ? [current, ...profiles.filter((ctx) => ctx.key !== current.key).slice(0, MAX_COUNTED_PROFILES - 1)]
     : [];
-  const toList = profiles.filter((ctx) => !toCount.includes(ctx));
+  const toList = profiles.filter((ctx) => !toCount.some((c) => c.key === ctx.key));
 
   const summaries = await Promise.all([
     ...toCount.map((ctx) => summarize(ctx, true, processKey)),
@@ -74,4 +75,35 @@ export async function GET(request: Request) {
     { profiles: summaries, current: current.key, counted: withCounts },
     { headers: { ...PROFILE_SCOPED_HEADERS } },
   );
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json()) as {
+      name?: unknown;
+      copyFrom?: unknown;
+      include?: unknown;
+    };
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const copyFrom = typeof body.copyFrom === "string" ? body.copyFrom.trim() : undefined;
+    const include =
+      typeof body.include === "object" && body.include !== null
+        ? (body.include as ProfileComponentsSelection)
+        : undefined;
+
+    if (!name) {
+      return NextResponse.json({ error: "Profile name is required" }, { status: 400 });
+    }
+
+    const created = createProfile(name, { copyFrom, include });
+    return NextResponse.json(
+      { ok: true, profile: created.profile, agentDir: created.agentDir },
+      { headers: { ...PROFILE_SCOPED_HEADERS }, status: 201 },
+    );
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } },
+    );
+  }
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LoaderCircle } from "lucide-react";
+import { Layers, LoaderCircle } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
 interface ProfileSummary {
@@ -29,12 +29,15 @@ interface ProfilesPayload {
 export function ProfileSwitcher({
   onProfileChange,
   onProfileReady,
+  onOpenProfileManager,
 }: {
   /** Fired after the cookie PUT succeeded, with the canonical profile key. */
   onProfileChange?: (profile: string) => void;
   /** Fires once the server-resolved current profile is known, so the parent
    *  can discard SSE frames / caches belonging to another profile. */
   onProfileReady?: (profile: string) => void;
+  /** Opens the profile manager tab in Settings */
+  onOpenProfileManager?: () => void;
 }) {
   const { t } = useI18n();
   const [payload, setPayload] = useState<ProfilesPayload | null>(null);
@@ -99,7 +102,7 @@ export function ProfileSwitcher({
     }
   }, [onProfileChange, t]);
 
-  if (!payload || payload.profiles.length <= 1) return null;
+  if (!payload) return null;
 
   return (
     <div
@@ -123,7 +126,13 @@ export function ProfileSwitcher({
           id="omp-profile-select"
           disabled={busy}
           value={payload.current}
-          onChange={(event) => void switchTo(event.target.value)}
+          onChange={(event) => {
+            if (event.target.value === "__manage__") {
+              onOpenProfileManager?.();
+              return;
+            }
+            void switchTo(event.target.value);
+          }}
           style={{
             width: "100%",
             minWidth: 0,
@@ -160,6 +169,11 @@ export function ProfileSwitcher({
               </option>
             );
           })}
+          {onOpenProfileManager && (
+            <option value="__manage__" style={{ background: "var(--bg-panel)", color: "var(--accent)" }}>
+              + Manage Profiles...
+            </option>
+          )}
         </select>
         {/* currentColor chevron (same as the Select primitive in ui/field):
             a baked gray data-URI would not follow theme switches. */}
@@ -178,6 +192,30 @@ export function ProfileSwitcher({
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </div>
+      {onOpenProfileManager && (
+        <button
+          type="button"
+          onClick={onOpenProfileManager}
+          title="Manage Profiles"
+          aria-label="Manage Profiles"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 24,
+            height: 24,
+            padding: 0,
+            border: "1px solid var(--border)",
+            borderRadius: 5,
+            background: "var(--bg-panel)",
+            color: "var(--text-muted)",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          <Layers size={12} />
+        </button>
+      )}
       {busy && <LoaderCircle size={12} className="animate-spin" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }} />}
       {error ? (
         <span

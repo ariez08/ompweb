@@ -745,6 +745,13 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
     const el = scrollContainerRef.current;
     if (anchor.kind === "bottom") {
       if (!el) return;
+      // Guard: if user has already scrolled away from bottom, cancel bottom anchor immediately
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom > 36) {
+        pendingAnchorRef.current = null;
+        lastBottomScrollHeightRef.current = null;
+        return;
+      }
       // The sentinel sits after the virtualized bottom spacer. It can be
       // visible while the viewport is still thousands of pixels above the
       // real bottom, so its rect is not a reliable anchor for virtualization.
@@ -812,16 +819,19 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
     setScrollTop((prev) => (prev === el.scrollTop ? prev : el.scrollTop));
     setViewportHeight((prev) => (prev === el.clientHeight ? prev : el.clientHeight));
   }, [layout, scrollContainerRef, messagesEndRef]);
+  const applyPendingAnchorRef = useRef(applyPendingAnchor);
+  applyPendingAnchorRef.current = applyPendingAnchor;
   // 打开会话：锚定底部 + 300ms 兜底重试（测量 revision 迟迟不到时按当时
   // DOM 校正一次；用户滚动/点击会取消，重试时锚定已空则无操作）。
+  // 注意：不要依赖 applyPendingAnchor，否则消息/布局变化会反复触发重置底部锚定。
   useEffect(() => {
     pendingAnchorRef.current = { kind: "bottom" };
     if (anchorRetryTimerRef.current !== null) clearTimeout(anchorRetryTimerRef.current);
     anchorRetryTimerRef.current = window.setTimeout(() => {
       anchorRetryTimerRef.current = null;
-      applyPendingAnchor();
+      applyPendingAnchorRef.current();
     }, 300);
-  }, [session?.id, applyPendingAnchor]);
+  }, [session?.id]);
   useEffect(() => {
     applyPendingAnchor();
   }, [layoutRevision, applyPendingAnchor]);
@@ -873,13 +883,21 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
     window.addEventListener("pointerdown", cancelAnchor, { passive: true });
     window.addEventListener("touchstart", cancelAnchor, { passive: true });
     window.addEventListener("keydown", cancelOnKey);
+    const el = scrollContainerRef.current;
+    const onScrollCancel = () => {
+      if (el && el.scrollHeight - el.scrollTop - el.clientHeight > 36) {
+        pendingAnchorRef.current = null;
+      }
+    };
+    el?.addEventListener("scroll", onScrollCancel, { passive: true });
     return () => {
       window.removeEventListener("wheel", cancelAnchor);
       window.removeEventListener("pointerdown", cancelAnchor);
       window.removeEventListener("touchstart", cancelAnchor);
       window.removeEventListener("keydown", cancelOnKey);
+      el?.removeEventListener("scroll", onScrollCancel);
     };
-  }, []);
+  }, [scrollContainerRef]);
   const generationSpeedKey = generationSpeed
     ? `${generationSpeed.current ?? "null"}|${generationSpeed.average ?? "null"}`
     : null;

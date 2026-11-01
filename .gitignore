@@ -98,3 +98,8 @@ build-resources/
 # staged host binary for the npm package (scripts/stage-host.mjs --vendor);
 # the publish workflow stages it per-platform before packing
 vendor/ompweb-host/
+
+# local beta server pid (worktree-only)
+.beta.pid
+.omp/
+bun.lock

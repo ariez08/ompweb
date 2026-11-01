@@ -693,6 +693,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         body: JSON.stringify({
           toolNames: newCaps.tools,
           skillPatterns: newCaps.skills,
+          disabledMcp: newCaps.disabledMcp,
         }),
       }).catch(() => {});
     }
@@ -1323,6 +1324,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (selectedModel) setPendingModel(selectedModel);
       const toolNames = capabilities.tools;
       const skillPatterns = capabilities.skills;
+      const disabledMcp = capabilities.disabledMcp;
       const res = await fetch("/api/agent/new", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1331,7 +1333,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           type: "ensure_session",
           toolNames,
           skillPatterns,
-          ...(selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.modelId } : {}),
+          disabledMcp,
           ...(thinkingLevel !== "auto" ? { thinkingLevel } : {}),
           ...(advisorEnabled ? { advisor: true } : {}),
         }),
@@ -3352,19 +3354,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   const handleScrollPositionChange = useCallback(() => {
-    const userScrollIntent = Date.now() <= userScrollIntentUntilRef.current;
-    // A user wheel, keyboard, touch, or scrollbar scroll must win over the
-    // timer used to suppress our own scroll events. During a busy stream that
-    // timer is refreshed every frame, so checking it first would trap the user
-    // at the bottom.
-    if (!userScrollIntent && Date.now() < ignoreProgrammaticScrollUntilRef.current) return;
     const container = scrollContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const userScrollIntent = Date.now() <= userScrollIntentUntilRef.current;
+
+    // If user is scrolled up (> 48px from bottom), ALWAYS disable following.
+    // Never allow programmatic scroll ignore timers to mask user reading position.
+    if (distanceFromBottom > 48) {
+      completionScrollAllowedRef.current = false;
+      return;
+    }
+
+    // If user scrolled back down to the bottom (within 48px), re-enable auto-scroll.
+    if (!userScrollIntent && Date.now() < ignoreProgrammaticScrollUntilRef.current) return;
     const end = messagesEndRef.current;
-    if (!container || !end) return;
-    // Recompute even while idle: otherwise the flag stays false after a run
-    // ends while the user is scrolled up, and a message that arrives outside
-    // a run (queued follow-up, steering reply) would never auto-scroll.
-    completionScrollAllowedRef.current = end.getBoundingClientRect().bottom - container.getBoundingClientRect().bottom <= 24;
+    if (end) {
+      completionScrollAllowedRef.current = end.getBoundingClientRect().bottom - container.getBoundingClientRect().bottom <= 36;
+    } else {
+      completionScrollAllowedRef.current = distanceFromBottom <= 48;
+    }
   }, []);
 
   // Load session on mount

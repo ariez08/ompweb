@@ -19,6 +19,7 @@ export async function POST(
     const body = (await req.json().catch(() => ({}))) as {
       toolNames?: string[];
       skillPatterns?: string[];
+      disabledMcp?: string[];
     };
 
     const session = getRpcSession(id, ctx);
@@ -26,6 +27,7 @@ export async function POST(
       await session.updateCapabilities({
         toolNames: body.toolNames,
         skillPatterns: body.skillPatterns,
+        disabledMcp: body.disabledMcp,
       });
     }
 
@@ -36,6 +38,7 @@ export async function POST(
         live: Boolean(session?.isAlive()),
         toolNames: body.toolNames,
         skillPatterns: body.skillPatterns,
+        disabledMcp: body.disabledMcp,
       },
       { headers: { ...PROFILE_SCOPED_HEADERS } },
     );

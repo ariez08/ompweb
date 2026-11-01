@@ -25,6 +25,7 @@ const McpConfig = dynamic(() => import("./McpConfig").then((module) => module.Mc
 const AgentsConfig = dynamic(() => import("./AgentsConfig").then((module) => module.AgentsConfig), { loading: SettingsTabLoading, ssr: false });
 const NativeSettingsPanel = dynamic(() => import("./NativeSettingsPanel").then((module) => module.NativeSettingsPanel), { loading: SettingsTabLoading, ssr: false });
 const RemoteAccessSetting = dynamic(() => import("./RemoteAccessSetting").then((module) => module.RemoteAccessSetting), { loading: SettingsTabLoading, ssr: false });
+const ProfileManager = dynamic(() => import("./ProfileManager").then((module) => module.ProfileManager), { loading: SettingsTabLoading, ssr: false });
 import { NetworkProxyConfig } from "./NetworkProxyConfig";
 import { SplashAnimationSetting } from "./SplashAnimationSetting";
 import { NativeExtrasSetting } from "./NativeExtrasSetting";
@@ -1371,6 +1372,26 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                   </p>
                 </div>
                 <AgentsConfig cwd={cwd} />
+              </div>
+            )}
+
+            {/* OMP PROFILES TAB */}
+            {currentTab === "profiles" && (
+              <div
+                role="tabpanel"
+                id="settings-panel-profiles"
+                aria-labelledby="settings-tab-profiles"
+                style={{
+                  display: currentTab === "profiles" ? "flex" : "none",
+                  height: "100%",
+                  minHeight: 0,
+                  flexDirection: "column",
+                  overflowY: "auto",
+                  padding: 20,
+                  gap: 16,
+                }}
+              >
+                <ProfileManager />
               </div>
             )}
 

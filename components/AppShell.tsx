@@ -1265,6 +1265,7 @@ export function AppShell() {
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
         onOpenSettings={() => setSettingsTab("general")}
+        onOpenProfileManager={() => setSettingsTab("profiles")}
         onOpenRemote={() => setSettingsTab("remote")}
         onOpenArchive={() => setArchiveBrowserOpen(true)}
         updateAvailable={appUpdateAvailable || ompUpdateAvailable}

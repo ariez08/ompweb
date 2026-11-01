@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { Activity, Bot, Cable, Cpu, KeyRound, ListTree, RefreshCw, Settings2, ShieldCheck, Smartphone, Sparkles } from "lucide-react";
+import { Activity, Bot, Cable, Cpu, KeyRound, Layers, ListTree, RefreshCw, Settings2, ShieldCheck, Smartphone, Sparkles } from "lucide-react";
 import type { ComponentType, CSSProperties } from "react";
 
 export type SettingsTab =
@@ -12,6 +12,7 @@ export type SettingsTab =
   | "providers"
   | "intelligence"
   | "agents"
+  | "profiles"
   | "extensions"
   | "mcp"
   | "skills"
@@ -36,6 +37,7 @@ export const SETTINGS_CATEGORIES: TabItem[] = [
   { id: "providers", label: "API Keys & Providers", description: "Connected OAuth accounts, API keys, and model registry", Icon: KeyRound },
   { id: "intelligence", label: "Agent & Intelligence", description: "Advisor, memory, autolearn, compaction and retry", Icon: Sparkles },
   { id: "agents", label: "Agents", description: "Task agents, model settings, and tool policy", Icon: Bot },
+  { id: "profiles", label: "OMP Profiles", description: "Manage OMP profiles, configs, model roles, and personalities", Icon: Layers },
   { id: "mcp", label: "Extensions & Tools", description: "MCP servers, managed skills, and OMP plugins", Icon: Cable },
   { id: "native", label: "OMP Native Settings", description: "Schema-driven full omp config (all settings, via omp CLI)", Icon: ListTree },
   { id: "system", label: "System & Updates", description: "App updates, runtime version, and active session restart", Icon: RefreshCw },
