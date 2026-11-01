@@ -103,3 +103,9 @@ vendor/ompweb-host/
 .beta.pid
 .omp/
 bun.lock
+
+# codegraph local index (codegraph init)
+.codegraph/
+
+# omp LSP config is machine-local (absolute rust-analyzer path)
+**/.omp/lsp.json
