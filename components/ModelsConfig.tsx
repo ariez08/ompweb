@@ -710,6 +710,7 @@ function ModelRolesDetail({ models }: { models: RuntimeModelEntry[] }) {
   const [roles, setRoles] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savedOk, setSavedOk] = useState(false);
   const [rolesLoaded, setRolesLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -725,70 +726,92 @@ function ModelRolesDetail({ models }: { models: RuntimeModelEntry[] }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const save = async () => {
-    if (!rolesLoaded) return;
+  const latestRef = useRef<Record<string, string> | null>(null);
+  const drainingRef = useRef(false);
+
+  const persistRoles = (nextRoles: Record<string, string>) => {
+    setRoles(nextRoles);
     setSaving(true);
+    setSavedOk(false);
     setError(null);
-    try {
-      const response = await fetch("/api/model-roles", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roles }) });
-      const data = await response.json() as { error?: string };
-      if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
-      toast.success(t("modelsConfig.rolesSaved"));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setSaving(false);
-    }
+    latestRef.current = nextRoles;
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    void (async () => {
+      try {
+        while (latestRef.current !== null) {
+          const snapshot = latestRef.current;
+          latestRef.current = null;
+          try {
+            const response = await fetch("/api/model-roles", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ roles: snapshot }),
+            });
+            const data = await response.json() as { error?: string };
+            if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+            setSavedOk(true);
+            setTimeout(() => setSavedOk(false), 2000);
+          } catch (reason) {
+            setError(reason instanceof Error ? reason.message : String(reason));
+          }
+        }
+      } finally {
+        drainingRef.current = false;
+        setSaving(false);
+      }
+    })();
   };
 
-  // A role selector is `provider/modelId[:effort]`. Model ids from custom
-  // providers may themselves contain slashes (org/model) — and a bare model
-  // id in a role selector is inferred by omp, so only a trailing known effort
-  // is ever split off (never the text after the last slash). Persisted
-  // selectors keep exactly the provider/model text the user picked plus the
-  // effort; both updates preserve the other half instead of re-mangling it.
   const updateRoleModel = (role: string, modelKey: string) => {
     const { effort } = parseRoleSelector(roles[role]);
-    setRoles((values) => ({ ...values, [role]: buildRoleSelector(modelKey, effort) }));
+    const next = { ...roles, [role]: buildRoleSelector(modelKey, effort) };
+    persistRoles(next);
   };
 
   const updateRoleThinking = (role: string, effort: string) => {
     const { modelKey } = parseRoleSelector(roles[role]);
-    setRoles((values) => ({ ...values, [role]: buildRoleSelector(modelKey, effort) }));
+    const next = { ...roles, [role]: buildRoleSelector(modelKey, effort) };
+    persistRoles(next);
   };
 
   const clearRole = (role: string) => {
-    setRoles((values) => {
-      const next = { ...values };
-      delete next[role];
-      return next;
-    });
+    const next = { ...roles };
+    delete next[role];
+    persistRoles(next);
   };
 
   return <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-    <div>
-      <SectionTitle>{t("modelsConfig.modelRolesTitle")}</SectionTitle>
-      <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>{t("modelsConfig.modelRolesDesc")}</p>
+    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+      <div>
+        <SectionTitle>{t("modelsConfig.modelRolesTitle")}</SectionTitle>
+        <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>{t("modelsConfig.modelRolesDesc")}</p>
+      </div>
+      {(saving || savedOk) && (
+        <span style={{ fontSize: 11, color: savedOk ? "var(--status-success)" : "var(--accent)", padding: "4px 8px", background: "var(--bg-panel)", borderRadius: "var(--radius-control)", display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+          {savedOk && (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          )}
+          {savedOk ? t("modelsConfig.saved") : t("modelsConfig.saving")}
+        </span>
+      )}
     </div>
     {loading ? <div style={{ color: "var(--text-muted)", fontSize: 12 }}>{t("modelsConfig.loadingRoles")}</div> : NATIVE_MODEL_ROLES.map((role) => (
-      <div key={role} className="model-role-row" style={{ display: "grid", gridTemplateColumns: "82px minmax(0, 1fr) minmax(110px, 0.35fr)", alignItems: "center", gap: 10, fontSize: 12 }}>
+      <div key={role} className="model-role-row" style={{ display: "grid", gridTemplateColumns: "82px minmax(0, 1fr) 140px 28px", alignItems: "center", gap: 10, fontSize: 12 }}>
         <code style={{ color: "var(--text-muted)" }}>{role}</code>
         {(() => {
           const raw = roles[role] ?? "";
-          // Preserve the persisted selector verbatim while editing a field:
-          // the model dropdown value is the provider-qualified key (first
-          // slash splits provider from id; ids may contain further slashes)
-          // and the effort only splits off a trailing KNOWN level.
           const { modelKey, effort } = parseRoleSelector(raw);
           const model = models.find((item) => `${item.provider}/${item.id}` === modelKey);
-          const modelKnown = !modelKey || Boolean(model);
           return <>
             <RoleModelPicker role={role} value={modelKey} models={models} onChange={(k) => updateRoleModel(role, k)} />
             <select aria-label={`Thinking level for ${role}`} value={effort} disabled={!model} onChange={(event) => updateRoleThinking(role, event.target.value)} style={{ minWidth: 0, padding: "7px 9px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg)", color: "var(--text)", fontSize: 12, opacity: model ? 1 : 0.55 }}>
               <option value="">{t("modelsConfig.modelDefault")}</option>
               {(model?.thinkingLevels ?? []).filter((level) => level !== "off").map((level) => <option key={level} value={level}>{level}</option>)}
             </select>
-            {raw !== "" && (
+            {raw !== "" ? (
               <button
                 type="button"
                 onClick={() => clearRole(role)}
@@ -799,13 +822,14 @@ function ModelRolesDetail({ models }: { models: RuntimeModelEntry[] }) {
               >
                 <Trash2 size={13} strokeWidth={1.8} aria-hidden="true" />
               </button>
+            ) : (
+              <span aria-hidden="true" style={{ width: 24, height: 24 }} />
             )}
           </>;
         })()}
       </div>
     ))}
     {error && <div role="alert" style={{ color: "var(--status-error)", fontSize: 12 }}>{error}</div>}
-    <button type="button" onClick={() => void save()} disabled={loading || saving || !rolesLoaded} style={{ alignSelf: "flex-start", padding: "7px 12px", border: "none", borderRadius: "var(--radius-control)", background: "var(--accent)", color: "var(--on-accent)", cursor: saving ? "wait" : "pointer", fontSize: 12, fontWeight: 600 }}>{saving ? t("modelsConfig.saving") : t("modelsConfig.saveRoles")}</button>
   </div>;
 }
 
@@ -2971,29 +2995,37 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false, 
         {/* Footer */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, padding: "10px 18px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
           {saveError && <span style={{ fontSize: 12, color: "var(--status-error)", flex: 1 }}>{saveError}</span>}
-          <button onClick={onClose} style={{ padding: "6px 14px", background: "none", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)", cursor: "pointer", fontSize: 13 }}>
-            {t("modelsConfig.cancel")}
-          </button>
-          <button onClick={handleSave} disabled={loading || !configLoaded || saving || savedOk || parseError !== null || loadError !== null} style={{
-            position: "relative",
-            padding: "6px 16px",
-            minWidth: 92,
-            background: savedOk ? "var(--status-success)" : (saving || parseError) ? "var(--bg-panel)" : "var(--accent)",
-            border: "none", borderRadius: 6,
-            color: savedOk ? "var(--on-accent)" : (saving || parseError) ? "var(--text-muted)" : "var(--on-accent)",
-            cursor: (saving || savedOk || parseError) ? "default" : "pointer", fontSize: 13, fontWeight: 600,
-            display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
-            transition: "background-color var(--dur-med) var(--ease-out-warm), color var(--dur-med) var(--ease-out-warm)",
-            animation: savedOk ? "saved-pop var(--dur-theme) var(--ease-out-warm)" : undefined,
-          }}>
-            {savedOk && (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
-                style={{ strokeDasharray: 18, animation: "saved-check-draw 0.35s ease forwards", flexShrink: 0 }}>
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            )}
-            <span>{savedOk ? t("modelsConfig.saved") : saving ? t("modelsConfig.saving") : t("modelsConfig.save")}</span>
-          </button>
+          {selection?.type === "roles" || selection?.type === "registry" || selection?.type === "fallbacks" || selection?.type === "picker" ? (
+            <button onClick={onClose} className="ui-focus-ring" style={{ padding: "6px 16px", background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+              {t("modelsConfig.close")}
+            </button>
+          ) : (
+            <>
+              <button onClick={onClose} style={{ padding: "6px 14px", background: "none", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)", cursor: "pointer", fontSize: 13 }}>
+                {t("modelsConfig.cancel")}
+              </button>
+              <button onClick={handleSave} disabled={loading || !configLoaded || saving || savedOk || parseError !== null || loadError !== null} style={{
+                position: "relative",
+                padding: "6px 16px",
+                minWidth: 92,
+                background: savedOk ? "var(--status-success)" : (saving || parseError) ? "var(--bg-panel)" : "var(--accent)",
+                border: "none", borderRadius: 6,
+                color: savedOk ? "var(--on-accent)" : (saving || parseError) ? "var(--text-muted)" : "var(--on-accent)",
+                cursor: (saving || savedOk || parseError) ? "default" : "pointer", fontSize: 13, fontWeight: 600,
+                display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+                transition: "background-color var(--dur-med) var(--ease-out-warm), color var(--dur-med) var(--ease-out-warm)",
+                animation: savedOk ? "saved-pop var(--dur-theme) var(--ease-out-warm)" : undefined,
+              }}>
+                {savedOk && (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
+                    style={{ strokeDasharray: 18, animation: "saved-check-draw 0.35s ease forwards", flexShrink: 0 }}>
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+                <span>{savedOk ? t("modelsConfig.saved") : saving ? t("modelsConfig.saving") : t("modelsConfig.save")}</span>
+              </button>
+            </>
+          )}
         </div>
       </ModelsConfigSurface>
     {pickerOpen && (
