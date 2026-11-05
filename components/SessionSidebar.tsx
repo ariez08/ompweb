@@ -1477,7 +1477,7 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
       if (q) rows = rows.filter((row) => row.title.toLowerCase().includes(q));
       if (rows.length === 0) continue;
       rows.sort((a, b) => (b.modified ?? "").localeCompare(a.modified ?? ""));
-      groups.push({ profile: bucket.profile, isDefault: bucket.isDefault, rows, total: rows.length });
+      groups.push({ profile: bucket.profile, isDefault: bucket.isDefault, rows: rows.slice(0, 5), total: rows.length });
     }
     return groups;
   }, [viewProfile, profileBuckets, runningOnly, deferredSearchQuery]);
