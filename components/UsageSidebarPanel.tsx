@@ -87,11 +87,13 @@ export function UsageSidebarPanel() {
       });
   }, []);
 
-  // Pre-warm stats on mount after app startup finishes
+  // Pre-warm stats on mount after app startup finishes. Deliberately slow:
+  // prewarming spawns two heavy CLI processes (`omp stats` + `omp usage`).
+  // Hovering the usage button still calls prewarmStatsData() on demand.
   useEffect(() => {
     const initTimer = window.setTimeout(() => {
       prewarmStatsData();
-    }, 350);
+    }, 5000);
     return () => window.clearTimeout(initTimer);
   }, []);
 

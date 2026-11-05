@@ -315,25 +315,31 @@ export function AppShell() {
   }, [sidebarOpen, mobileSidebarReady]);
   useEffect(() => {
     const controller = new AbortController();
-    void fetch("/api/omp-update", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "check" }),
-      signal: controller.signal,
-    })
-      .then((response) => response.ok ? response.json() : null)
-      .then((data: { currentVersion?: string | null; availableVersion?: string | null; updateAvailable?: boolean; updateCommand?: string } | null) => {
-        setOmpUpdateAvailable(Boolean(data?.updateAvailable));
-        if (!data?.updateAvailable || !data.availableVersion) return;
-        const cmd = data.updateCommand || "omp update";
-        toast.info(
-          <UpdateToastTitle product="omp" />,
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}><UpdateToast currentVersion={data.currentVersion} availableVersion={data.availableVersion} command={cmd} /></div>,
-          { variant: "update" },
-        );
+    // Defer past first paint: startup must not compete with session restore.
+    const timer = setTimeout(() => {
+      void fetch("/api/omp-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "check" }),
+        signal: controller.signal,
       })
-      .catch(() => {});
-    return () => controller.abort();
+        .then((response) => response.ok ? response.json() : null)
+        .then((data: { currentVersion?: string | null; availableVersion?: string | null; updateAvailable?: boolean; updateCommand?: string } | null) => {
+          setOmpUpdateAvailable(Boolean(data?.updateAvailable));
+          if (!data?.updateAvailable || !data.availableVersion) return;
+          const cmd = data.updateCommand || "omp update";
+          toast.info(
+            <UpdateToastTitle product="omp" />,
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}><UpdateToast currentVersion={data.currentVersion} availableVersion={data.availableVersion} command={cmd} /></div>,
+            { variant: "update" },
+          );
+        })
+        .catch(() => {});
+    }, 4000);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, []);
   // Detect a missing omp runtime once at startup so the UI can prompt the
   // install command instead of failing on the first AI request.
@@ -859,6 +865,7 @@ export function AppShell() {
   // `parentSessionId`, so children are a filter). Refetches whenever the
   // sidebar list is invalidated so a fresh fork appears immediately.
   useEffect(() => {
+    if (sessionCatalog.length > 0) return;
     if (!initialSessionRestored) return;
     let cancelled = false;
     void fetch("/api/sessions")
@@ -868,7 +875,7 @@ export function AppShell() {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [initialSessionRestored, refreshKey, selectedSession?.id]);
+  }, [initialSessionRestored, refreshKey, selectedSession?.id, sessionCatalog.length]);
 
   const forkLineage = useMemo(() => {
     const currentId = selectedSession?.id;
@@ -1272,6 +1279,7 @@ export function AppShell() {
         initialSessionId={initialSessionId}
         skipInitialProjectSelection={initialNavigation.requestedCwd !== null}
         onInitialRestoreDone={handleInitialRestoreDone}
+        onSessionsLoaded={setSessionCatalog}
         refreshKey={refreshKey}
         onSessionDeleted={handleSessionDeleted}
         selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? activeCwd ?? null}

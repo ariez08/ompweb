@@ -23,7 +23,7 @@
     "components/ProfileManager.tsx": 6,
     "components/ProfileSwitcher.tsx": 2,
     "components/RemoteAccessSetting.tsx": 7,
-    "components/SessionSidebar.tsx": 23,
+    "components/SessionSidebar.tsx": 25,
     "components/SettingsConfig.tsx": 6,
     "components/SkillsConfig.tsx": 6,
     "components/SubagentTranscriptDialog.tsx": 2,

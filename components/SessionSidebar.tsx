@@ -41,6 +41,9 @@ interface Props {
   initialSessionId?: string | null;
   skipInitialProjectSelection?: boolean;
   onInitialRestoreDone?: () => void;
+  /** Called with the fresh catalog whenever /api/sessions resolves, so the
+   *  parent can reuse it instead of issuing a duplicate fetch. */
+  onSessionsLoaded?: (sessions: SessionInfo[]) => void;
   refreshKey?: number;
   onSessionDeleted?: (sessionId: string) => void;
   selectedCwd?: string | null;
@@ -782,7 +785,7 @@ function OmpWebTitle() {
     </button>
   );
 }
-export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, explorerRefreshing, onExplorerRefreshDone, onAtMention, onAtMentions, onOpenSettings, onOpenProfileManager, onOpenRemote, onOpenArchive, updateAvailable, onRunScriptInTerminal, onProfileChange }: Props) {
+export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, onSessionsLoaded, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, explorerRefreshing, onExplorerRefreshDone, onAtMention, onAtMentions, onOpenSettings, onOpenProfileManager, onOpenRemote, onOpenArchive, updateAvailable, onRunScriptInTerminal, onProfileChange }: Props) {
   const { t, locale } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -873,6 +876,7 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
         byProfile?: ProfileSessionBucket[];
       };
       setAllSessions(data.sessions);
+      onSessionsLoaded?.(data.sessions);
       setProfileBuckets(Array.isArray(data.byProfile) ? data.byProfile : null);
       // Treat the fetched running set as an initial fallback only. Once SSE is
       // live it owns this state, so a slow fetch can't revive a stale snapshot.
@@ -898,7 +902,7 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [t]);
+  }, [t, onSessionsLoaded]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {
@@ -1509,6 +1513,42 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
       restoreRetryTimerRef.current = null;
     }
   }, []);
+
+  // Fast-path: when initialSessionId is provided in URL (?session=...), fetch it directly
+  // so the chat mounts in ~30ms without waiting for the full session scan across all profiles.
+  useEffect(() => {
+    if (!initialSessionId || restoredRef.current) return;
+    let cancelled = false;
+    void fetch(`/api/sessions/${encodeURIComponent(initialSessionId)}?deferThinking=1&deferMedia=1`)
+      .then(async (res) => {
+        if (cancelled || restoredRef.current) return;
+        if (res.ok) {
+          const data = (await res.json().catch(() => null)) as { info?: SessionInfo } | null;
+          if (data?.info && !cancelled && !restoredRef.current) {
+            restoreRetryRef.current = 0;
+            restoredRef.current = true;
+            setSelectedCwd(data.info.cwd);
+            expandProject(workspaceKeyOf(data.info));
+            onSelectSession(data.info, true);
+            onInitialRestoreDone?.();
+          }
+        } else {
+          const errData = (await res.json().catch(() => null)) as { code?: string; profile?: string } | null;
+          if (errData?.code === "session_wrong_profile" && errData.profile) {
+            const switchRes = await fetch("/api/profile", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ profile: errData.profile }),
+            });
+            if (switchRes.ok) {
+              window.location.reload();
+            }
+          }
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [initialSessionId, expandProject, onSelectSession, onInitialRestoreDone]);
 
   // Restore URL state first, then the remembered session for the default
   // workspace. Only after that decision may the parent expose an empty chat.

@@ -1,6 +1,6 @@
 "use client";
 
-import { Children, cloneElement, isValidElement, useMemo, type ComponentProps, type MouseEvent, type ReactElement, type ReactNode } from "react";
+import { memo, Children, cloneElement, isValidElement, useMemo, type ComponentProps, type MouseEvent, type ReactElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { resolveLocalFileHref } from "@/lib/file-links";
 import { encodeFilePathForApi } from "@/lib/file-paths";
@@ -15,8 +15,7 @@ interface MarkdownBodyProps {
   cwd?: string;
   onOpenFile?: (filePath: string) => void;
 }
-
-export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile }: MarkdownBodyProps) {
+export const MarkdownBody = memo(function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile }: MarkdownBodyProps) {
   // Skip normalizeDisplayMath while streaming: it scans the entire document
   // on every token batch but math content almost never arrives mid-stream.
   // The normalization runs once on the final committed message instead.
@@ -150,4 +149,4 @@ export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile
       </ReactMarkdown>
     </div>
   );
-}
+});

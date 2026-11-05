@@ -26,7 +26,7 @@ export interface CliLockInfo {
   command: string;
 }
 
-const CACHE_TTL_MS = 2500;
+const CACHE_TTL_MS = 5000;
 let cacheTimestamp = 0;
 let cachedMap: Map<string, CliLockInfo> = new Map();
 let inflightQuery: Promise<Map<string, CliLockInfo>> | null = null;
@@ -48,7 +48,7 @@ function resolveSessionFromCliProcess(cl: string): string | null {
 async function queryLockedSessionsWin32(): Promise<Map<string, CliLockInfo>> {
   const map = new Map<string, CliLockInfo>();
   const psCmd =
-    "Get-CimInstance Win32_Process -Filter \"Name like '%bun%' or Name like '%node%' or Name like '%omp%'\" | " +
+    "Get-CimInstance Win32_Process -Filter \"Name = 'omp.exe' or Name = 'node.exe' or Name = 'bun.exe'\" | " +
     "Where-Object { " +
     // Only real interactive CLI entrypoints. `\\bomp(\\.exe)?\\b` used to also
     // match this server's own `node .../omp-web.js` process, which then
@@ -130,7 +130,7 @@ async function queryLockedSessionsUnix(): Promise<Map<string, CliLockInfo>> {
 }
 /**
  * Returns a map of all session IDs currently held by an external CLI/terminal
- * process, keyed by lowercase session ID. Results are cached for 2.5 seconds to
+ * process, keyed by lowercase session ID. Results are cached for 5 seconds to
  * prevent query overhead on frequent polling.
  */
 export async function listCliLockedSessions(): Promise<Map<string, CliLockInfo>> {
