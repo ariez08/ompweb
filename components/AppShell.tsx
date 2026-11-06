@@ -1286,7 +1286,7 @@ export function AppShell() {
     } else {
       setWorkbenchRequestedView({ view: "files", nonce: Date.now() });
       setRightPanelOpen(true);
-      toast.info(t("chatWindow.planGenerating") || "计划文件正在生成中，请稍候...");
+      toast.info(t("chatWindow.planGenerating"));
     }
   }, [handleOpenFile, t]);
 
@@ -1561,8 +1561,8 @@ export function AppShell() {
           <button
             type="button"
             onClick={toggleTerminalPanel}
-            title={terminalOpen ? (t("appShell.hideTerminal") || "收起终端") : (t("appShell.toggleTerminal") || "打开终端 (Terminal)")}
-            aria-label={t("appShell.toggleTerminal") || "切换终端"}
+            title={terminalOpen ? t("appShell.hideTerminal") : t("appShell.toggleTerminal")}
+            aria-label={t("appShell.toggleTerminal")}
             aria-pressed={terminalOpen}
             className="shell-toolbar-btn ui-focus-ring"
             style={{
@@ -2401,7 +2401,7 @@ export function AppShell() {
         onPointerCancel={finishGithubTriggerDrag}
         onLostPointerCapture={finishGithubTriggerDrag}
         onDoubleClick={resetGithubTriggerPosition}
-        title={`${t("appShell.githubStatus")} · 拖动可上下移动，双击恢复默认位置`}
+        title={`${t("appShell.githubStatus")} · ${t("appShell.githubStatusDragHint")}`}
         aria-label={t("appShell.githubStatus")}
         aria-pressed={activeTopPanel === "github"}
         aria-haspopup="dialog"

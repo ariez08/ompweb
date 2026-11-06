@@ -244,7 +244,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
   const save = async () => {
     const server = parse();
     if (!server || !name.trim()) {
-      if (!name.trim()) setMessage("请输入服务端名称");
+      if (!name.trim()) setMessage(t("mcpConfig.enterServerName"));
       return;
     }
     setSaving(true);
@@ -368,7 +368,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
             }}
           >
             <Sparkles size={15} style={{ color: "var(--accent)" }} />
-            <strong style={{ fontSize: 13, color: "var(--text)" }}>{t("mcpConfig.builtinServers") || "原生内置 MCP 扩展"}</strong>
+            <strong style={{ fontSize: 13, color: "var(--text)" }}>{t("mcpConfig.builtinServers")}</strong>
             <span
               style={{
                 fontSize: 10,
@@ -380,7 +380,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                 letterSpacing: "0.02em",
               }}
             >
-              {t("mcpConfig.builtinTag") || "原生自带"}
+              {t("mcpConfig.builtinTag")}
             </span>
           </div>
           <div style={{ padding: 14, display: "grid", gap: 12 }}>
@@ -426,7 +426,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                           }}
                         >
                           <Check size={13} />
-                          <span>{t("mcpConfig.alreadyConfigured") || "已就绪"}</span>
+                          <span>{t("mcpConfig.alreadyConfigured")}</span>
                         </div>
                       ) : (
                         <button
@@ -448,7 +448,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                           }}
                         >
                           <Zap size={13} />
-                          <span>{t("mcpConfig.enablePreset") || "一键启用"}</span>
+                          <span>{t("mcpConfig.enablePreset")}</span>
                         </button>
                       )}
                       <button
@@ -469,7 +469,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                           cursor: "pointer",
                         }}
                       >
-                        {t("mcpConfig.editPreset") || "载入编辑"}
+                        {t("mcpConfig.editPreset")}
                       </button>
                     </div>
                   </div>
@@ -491,7 +491,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                         {tool}
                       </span>
                     ))}
-                    <span style={{ fontSize: 10, color: "var(--text-dim)", alignSelf: "center", marginLeft: 4 }}>+ 8 更多高级编排工具</span>
+                    <span style={{ fontSize: 10, color: "var(--text-dim)", alignSelf: "center", marginLeft: 4 }}>{t("mcpConfig.moreAdvancedTools")}</span>
                   </div>
                 </div>
               );
@@ -521,7 +521,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
         >
           <Sliders size={15} style={{ color: "var(--accent)" }} />
           <strong style={{ fontSize: 13, color: "var(--text)", flexShrink: 0 }}>
-            {cwd ? t("mcpConfig.projectServers") : "MCP 服务端管理"}
+            {cwd ? t("mcpConfig.projectServers") : t("mcpConfig.manageServers")}
           </strong>
           {path && (
             <code style={{ flex: 1, minWidth: 0, color: "var(--text-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -546,7 +546,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
           {/* Server List */}
           <div style={{ borderRight: "1px solid var(--border)", padding: 8, display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-dim)", textTransform: "uppercase", padding: "4px 6px" }}>
-              配置列表 ({servers.length})
+              {t("mcpConfig.configuredList", { count: servers.length })}
             </div>
             {servers.map((server) => {
               const summary = serverSummary(server.config);
@@ -589,8 +589,8 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                   </div>
                   <div style={{ marginTop: 2, fontSize: 10, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {summary.type}
-                    {summary.enabled ? "" : " · 关闭"}
-                    {!summary.valid ? " · 无效" : ""}
+                    {summary.enabled ? "" : ` · ${t("mcpConfig.disabled")}`}
+                    {!summary.valid ? ` · ${t("mcpConfig.invalid")}` : ""}
                     {summary.target ? ` · ${summary.target}` : ""}
                   </div>
                 </button>
@@ -598,7 +598,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
             })}
             {!loading && servers.length === 0 && (
               <div style={{ padding: "10px 8px", color: "var(--text-dim)", fontSize: 11, textAlign: "center" }}>
-                {t("mcpConfig.noServers") || "暂未配置服务端"}
+                {t("mcpConfig.noServers")}
               </div>
             )}
             <button
@@ -621,7 +621,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                 fontWeight: selected === null ? 700 : 500,
               }}
             >
-              <Plus size={14} /> {t("mcpConfig.addServer") || "添加服务端"}
+              <Plus size={14} /> {t("mcpConfig.addServer")}
             </button>
           </div>
 
@@ -630,7 +630,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
             {/* Header: Mode Switch & Template Shortcuts */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>快捷模版:</span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{t("mcpConfig.quickTemplates")}</span>
                 <button
                   type="button"
                   onClick={() => applyTemplate("python")}
@@ -672,7 +672,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                     cursor: "pointer",
                   }}
                 >
-                  <Sliders size={12} /> 表单
+                  <Sliders size={12} /> {t("mcpConfig.formMode")}
                 </button>
                 <button
                   type="button"
@@ -702,12 +702,12 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
             {/* Server Name */}
             <div>
               <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>
-                {t("mcpConfig.serverName") || "服务端标识名称"}
+                {t("mcpConfig.serverName")}
               </label>
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="例如: filesystem 或 python-runner"
+                placeholder={t("mcpConfig.serverNamePlaceholder")}
                 style={inputStyle}
               />
             </div>
@@ -717,34 +717,34 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 10 }}>
                   <div>
-                    <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>传输协议</label>
+                    <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>{t("mcpConfig.transportProtocol")}</label>
                     <select
                       value={formType}
                       onChange={(e) => setFormType(e.target.value as "stdio" | "http" | "sse")}
                       style={{ ...inputStyle, cursor: "pointer" }}
                     >
-                      <option value="stdio">stdio (本地命令)</option>
-                      <option value="http">http (远程端点)</option>
-                      <option value="sse">sse (流式端点)</option>
+                      <option value="stdio">{t("mcpConfig.stdioOption")}</option>
+                      <option value="http">{t("mcpConfig.httpOption")}</option>
+                      <option value="sse">{t("mcpConfig.sseOption")}</option>
                     </select>
                   </div>
                   {formType === "stdio" ? (
                     <div>
-                      <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>可执行命令 (Command)</label>
+                      <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>{t("mcpConfig.commandLabel")}</label>
                       <input
                         value={formCommand}
                         onChange={(e) => setFormCommand(e.target.value)}
-                        placeholder="例如: python3, node, npx, uvx"
+                        placeholder={t("mcpConfig.commandPlaceholder")}
                         style={inputStyle}
                       />
                     </div>
                   ) : (
                     <div>
-                      <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>远程 URL (Endpoint)</label>
+                      <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>{t("mcpConfig.endpointLabel")}</label>
                       <input
                         value={formUrl}
                         onChange={(e) => setFormUrl(e.target.value)}
-                        placeholder="例如: http://localhost:8000/mcp"
+                        placeholder={t("mcpConfig.endpointPlaceholder")}
                         style={inputStyle}
                       />
                     </div>
@@ -753,11 +753,11 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
 
                 {formType === "stdio" && (
                   <div>
-                    <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>启动参数 (Arguments)</label>
+                    <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>{t("mcpConfig.argsLabel")}</label>
                     <input
                       value={formArgs}
                       onChange={(e) => setFormArgs(e.target.value)}
-                      placeholder="例如: mcp_server.py 或 -y @modelcontextprotocol/server-filesystem /path"
+                      placeholder={t("mcpConfig.argsPlaceholder")}
                       style={inputStyle}
                     />
                   </div>
@@ -772,14 +772,14 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                     style={{ cursor: "pointer", width: 14, height: 14 }}
                   />
                   <label htmlFor="mcp-server-enabled" style={{ fontSize: 12, color: "var(--text)", cursor: "pointer" }}>
-                    启用此服务端 (Enabled)
+                    {t("mcpConfig.enabledLabel")}
                   </label>
                 </div>
               </div>
             ) : (
               <div>
                 <label style={{ display: "block", color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>
-                  {t("mcpConfig.serverConfigJson") || "OMP 服务端配置 (JSON)"}
+                  {t("mcpConfig.serverConfigJson")}
                 </label>
                 <textarea
                   value={source}
@@ -809,7 +809,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                   fontSize: 12,
                 }}
               >
-                <Check size={13} /> {t("mcpConfig.check") || "检查校验"}
+                <Check size={13} /> {t("mcpConfig.check")}
               </button>
               <button
                 type="button"
@@ -829,7 +829,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                   fontWeight: 600,
                 }}
               >
-                {saving ? t("mcpConfig.saving") : t("mcpConfig.saveServer") || "保存配置"}
+                {saving ? t("mcpConfig.saving") : t("mcpConfig.saveServer")}
               </button>
               {selected && (
                 <button
@@ -850,7 +850,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                     marginLeft: "auto",
                   }}
                 >
-                  <Trash2 size={13} /> {t("mcpConfig.remove") || "删除"}
+                  <Trash2 size={13} /> {t("mcpConfig.remove")}
                 </button>
               )}
             </div>
@@ -879,9 +879,9 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
         >
           <Globe size={15} style={{ color: "var(--text-muted)" }} />
           <strong style={{ fontSize: 13, color: "var(--text)" }}>
-            {t("mcpConfig.configuredServers") || "已配置与自动发现的 MCP 仓库"}
+            {t("mcpConfig.configuredServers")}
           </strong>
-          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>({displayedServers.length} 款)</span>
+          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>({displayedServers.length} {t("mcpConfig.items")})</span>
 
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
             <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
@@ -889,7 +889,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
               <input
                 value={filterQuery}
                 onChange={(e) => setFilterQuery(e.target.value)}
-                placeholder="筛选 MCP..."
+                placeholder={t("mcpConfig.filterMcpPlaceholder")}
                 style={{
                   padding: "3px 8px 3px 24px",
                   fontSize: 11,
@@ -962,7 +962,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                   {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   <span>{sourceName}</span>
                   <span style={{ fontSize: 10, color: "var(--text-dim)", marginLeft: "auto", fontWeight: 400 }}>
-                    {groupServers.length} 个服务端
+                    {t("mcpConfig.serverCount", { count: groupServers.length })}
                   </span>
                 </button>
                 {isExpanded && (
@@ -1016,7 +1016,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
           })}
           {!loading && Object.keys(groupedDiscovered).length === 0 && (
             <div style={{ color: "var(--text-dim)", fontSize: 11, padding: 12, textAlign: "center" }}>
-              {t("mcpConfig.noMcpServers") || "未发现 MCP 服务端"}
+              {t("mcpConfig.noMcpServers")}
             </div>
           )}
         </div>

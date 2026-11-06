@@ -862,8 +862,8 @@ export function SettingsConfig({ activeTab, initialTarget, initialSelection, too
                     <button
                       type="button"
                       onClick={() => setNavCollapsed((v) => !v)}
-                      aria-label={navCollapsed ? "Expand settings navigation" : "Collapse settings navigation"}
-                      title={navCollapsed ? "展开设置导航" : "收起设置导航（仅图标）"}
+                      aria-label={navCollapsed ? t("settingsConfig.expandNav") : t("settingsConfig.collapseNav")}
+                      title={navCollapsed ? t("settingsConfig.expandNav") : t("settingsConfig.collapseNav")}
                       style={{
                         display: "flex", alignItems: "center", justifyContent: "center",
                         height: 30, margin: "6px 6px 0", padding: 0,
@@ -889,7 +889,7 @@ export function SettingsConfig({ activeTab, initialTarget, initialSelection, too
                     role="separator"
                     aria-orientation="vertical"
                     onPointerDown={onNavResizeStart}
-                    title="拖拽调整设置导航宽度"
+                    title={t("settingsConfig.resizeNav")}
                     style={{
                       width: 5, cursor: "col-resize", touchAction: "none",
                       background: "transparent", flexShrink: 0,
