@@ -152,17 +152,26 @@ export function isKnownProfile(name: string | undefined | null): boolean {
  * point for request-driven profile resolution.
  */
 export function resolveProfileContext(name: string | undefined | null): ProfileContext {
-  if (typeof name !== "string" || !name.trim() || name.trim() === DEFAULT_PROFILE) {
-    return defaultProfileContext();
+  const trimmed = typeof name === "string" ? name.trim() : "";
+  if (!trimmed || trimmed === DEFAULT_PROFILE) {
+    // Canonical default profile: explicit ~/.omp/agent root, unaffected by
+    // any inherited PI_CODING_AGENT_DIR or OMP_PROFILE from the launch shell.
+    return buildContext(DEFAULT_PROFILE, {
+      ...envScope(),
+      ompProfile: "",
+      piProfile: "",
+      agentDirOverride: undefined,
+    });
   }
-  if (!isKnownProfile(name)) return defaultProfileContext();
-  const normalized = normalizeProfileName(name.trim()) as string;
+  if (!isKnownProfile(trimmed)) {
+    return resolveProfileContext(DEFAULT_PROFILE);
+  }
+  const normalized = normalizeProfileName(trimmed) as string;
   return buildContext(normalized, {
     ...envScope(),
     ompProfile: normalized,
-    // Pin the profile: an inherited PI_PROFILE must never compete once a
-    // request selected an explicit profile.
     piProfile: "",
+    agentDirOverride: undefined,
   });
 }
 

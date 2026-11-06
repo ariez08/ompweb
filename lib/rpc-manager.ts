@@ -43,7 +43,7 @@ const READY_TIMEOUT_MS = 120_000;
 const MCP_LIST_TIMEOUT_MS = 15_000;
 /** State reads drive UI reconciliation and must never leave a stale spinner
  * waiting on a child that has stopped responding. */
-const GET_STATE_TIMEOUT_MS = 60_000;
+const GET_STATE_TIMEOUT_MS = 2_500;
 /** Prompt execution continues over frames; this cap applies only to accepting
  * the prompt command, not to model generation. */
 const PROMPT_ACK_TIMEOUT_MS = 30_000;

@@ -18,7 +18,9 @@ export async function GET(
     const rpc = getRpcSession(id, ctx);
     if (rpc?.isAlive()) {
       try {
-        const state = await rpc.send({ type: "get_state" }) as { isPromptRunning?: boolean; isStreaming?: boolean; isBashRunning?: boolean } | undefined;
+        const statePromise = rpc.send({ type: "get_state" }) as Promise<{ isPromptRunning?: boolean; isStreaming?: boolean; isBashRunning?: boolean } | undefined>;
+        const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("state_timeout")), 2500));
+        const state = await Promise.race([statePromise, timeoutPromise]);
         const fileActive = await isExternallyActive(id, 5000, ctx);
         const cliLock = await findCliSessionLock(id);
         const rpcRunning = Boolean(state?.isPromptRunning || state?.isStreaming || state?.isBashRunning);

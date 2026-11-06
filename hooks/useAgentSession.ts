@@ -27,7 +27,7 @@ import { createActiveGoal, parseActiveGoal, type ActiveGoal, type ActivePlan } f
 import type { HostToolDefinition, HostUriSchemeDefinition, RpcAvailableSlashCommand, SessionStatsInfo, TodoPhase } from "@/lib/pi-types";
 import { isRecord } from "@/lib/type-guards";
 import type { SessionCapabilities } from "@/lib/capabilities-types";
-
+import { setTabProfile } from "@/lib/client/tab-profile";
 // Stable across renders and HMR: the default transport for every hook instance.
 const defaultHttpClient: OmpwebClient = createHttpSseClient();
 import {
@@ -1149,16 +1149,29 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         externalRunningRef.current = false;
         setCliLockPid(null);
         setSessionLockKind("idle");
+        agentRunningRef.current = false;
+        setAgentRunning(false);
+        setAgentPhase(null);
       }
       const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
       const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}?${params}`);
       if (res.status === 404) {
+        const errData = await res.json().catch(() => null) as { code?: string; profile?: string } | null;
+        if (errData?.code === "session_wrong_profile" && errData.profile) {
+          setTabProfile(errData.profile);
+          window.location.reload();
+          return null;
+        }
         if (showLoading) {
           setData(null);
           setActiveLeafId(null);
           setMessages([]);
           setError(null);
+          setLoading(false);
         }
+        agentRunningRef.current = false;
+        setAgentRunning(false);
+        setAgentPhase(null);
         return null;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1245,6 +1258,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         } else {
           setCliLockPid(null);
           setSessionLockKind("idle");
+        }
+        if (!agentState.running) {
+          agentRunningRef.current = false;
+          setAgentRunning(false);
+          setAgentPhase(null);
         }
         if (showLoading) setLoading(false);
         return agentState;
@@ -3423,17 +3441,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
                     setSessionLockKind("web");
                   } else if (st?.external === false) {
                     setSessionLockKind("idle");
+                    if (externalPollRef.current) {
+                      clearInterval(externalPollRef.current);
+                      externalPollRef.current = null;
+                    }
+                    if (sessionIdRef.current !== session.id) return;
+                    setCliLockPid(null);
+                    externalRunningRef.current = false;
+                    agentRunningRef.current = false;
+                    setAgentRunning(false);
+                    setAgentPhase(null);
+                    dispatch({ type: "end" });
+                    addNotice({ type: "info", message: translate("agentSession.externalFinished") });
                   }
-                  if (externalPollRef.current) {
-                    clearInterval(externalPollRef.current);
-                    externalPollRef.current = null;
-                  }
-                  if (sessionIdRef.current !== session.id) return;
-                  setCliLockPid(null);
-                  externalRunningRef.current = false;
-                  agentRunningRef.current = false;
-                  dispatch({ type: "end" });
-                  addNotice({ type: "info", message: translate("agentSession.externalFinished") });
                 })
                 .catch(() => {
                   // transient failure — keep polling
@@ -3461,6 +3481,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             setBashRunning(true);
             void waitForBashSettlement(session.id);
           }
+        } else {
+          agentRunningRef.current = false;
+          setAgentRunning(false);
+          setAgentPhase(null);
         }
         if (agentState?.state) {
           // Model + thinking level are owned by loadSession (token-guarded);
