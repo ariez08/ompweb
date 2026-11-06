@@ -12,7 +12,10 @@ const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MCP_FILENAMES = [join(".omp", "mcp.json"), join(".omp", ".mcp.json"), "mcp.json", ".mcp.json"];
 
 export type McpServer = Record<string, unknown>;
-export type McpFile = Record<string, unknown> & { mcpServers?: Record<string, McpServer> };
+export type McpFile = Record<string, unknown> & {
+  mcpServers?: Record<string, McpServer>;
+  disabledServers?: string[];
+};
 export type McpUserConfig = {
   path: string;
   servers: Array<{ name: string; config: McpServer }>;
@@ -457,5 +460,39 @@ export function writeUserMcpServer(
       try { unlinkSync(temp); } catch {}
     }
     return { path: userPath };
+  });
+}
+
+/**
+ * Persist which MCP servers are switched off in the user-level config.
+ * OMP reads `disabledServers` from this file on every spawn, so the choice
+ * survives reloads and applies to both web and CLI sessions.
+ */
+export function writeUserMcpDisabledServers(
+  disabled: string[],
+  ctx: ProfileContext = defaultProfileContext(),
+): { path: string; disabledServers: string[] } {
+  const userPath = join(ctx.agentDir, "mcp.json");
+  const normalized = [...new Set(disabled.filter((name) => SERVER_NAME.test(name)))].sort((a, b) => a.localeCompare(b));
+  return withMcpConfigLock(userPath, () => {
+    let currentConfig: McpFile = {};
+    if (existsSync(userPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(userPath, "utf8"));
+        if (isRecord(parsed)) currentConfig = parsed as McpFile;
+      } catch {}
+    }
+    const config: McpFile = { ...currentConfig };
+    if (normalized.length > 0) config.disabledServers = normalized;
+    else delete config.disabledServers;
+    mkdirSync(dirname(userPath), { recursive: true });
+    const temp = `${userPath}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      renameSync(temp, userPath);
+    } finally {
+      try { unlinkSync(temp); } catch {}
+    }
+    return { path: userPath, disabledServers: normalized };
   });
 }

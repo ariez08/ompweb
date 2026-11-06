@@ -157,13 +157,17 @@ export function mapPresetToolNames(toolNames: string[]): string[] {
 
 const FULL_PRESET_KEY = [...PRESET_FULL].map((n) => n.toLowerCase()).sort().join(",");
 
-/** Extra CLI args for spawning `omp --mode rpc-ui` for a session. */
+/** Extra CLI args for spawning `omp --mode rpc-ui` for a session.
+ *
+ * `disabledMcp` is deliberately absent: OMP applies MCP switching from the
+ * user-level mcp.json `disabledServers` list at spawn time (the same path its
+ * own `/mcp disable` uses), so the caller writes that file and restarts.
+ */
 export function buildSessionSpawnArgs(
   sessionFile: string,
   toolNames?: string[],
   advisor = false,
   skillPatterns?: string[],
-  disabledMcp?: string[],
 ): string[] {
   const args: string[] = [];
   if (sessionFile) {
@@ -192,9 +196,6 @@ export function buildSessionSpawnArgs(
     }
   }
   if (advisor) args.push("--advisor");
-  if (disabledMcp && disabledMcp.length > 0) {
-    // When all discovered MCP are disabled or explicitly listed
-  }
   return args;
 }
 
@@ -1072,7 +1073,7 @@ export class AgentSessionWrapper {
         proc = await createRpcProcess({
           cwd: this.cwd,
           sessionId: this.sessionId,
-          extraArgs: buildSessionSpawnArgs(resumable ? sessionFile : "", this.toolNames, this.advisorSpawned, this.skillPatterns, this.disabledMcp),
+          extraArgs: buildSessionSpawnArgs(resumable ? sessionFile : "", this.toolNames, this.advisorSpawned, this.skillPatterns),
           onExit: ({ stderrTail }) => {
             if (this.proc === proc) this.handleProcessExit(stderrTail);
           },
@@ -1637,7 +1638,7 @@ export async function startRpcSession(
       proc = await createRpcProcess({
         cwd,
         sessionId: sessionId ?? `session-${Math.random().toString(36).slice(2, 10)}`,
-        extraArgs: buildSessionSpawnArgs(sessionFile, toolNames, advisor === true, skillPatterns, disabledMcp),
+        extraArgs: buildSessionSpawnArgs(sessionFile, toolNames, advisor === true, skillPatterns),
         onExit: ({ stderrTail }) => holder.wrapper?.handleProcessExit(stderrTail),
         ctx,
       });

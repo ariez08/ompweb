@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   getWorkspaceCapabilitiesCatalog,
   saveProfileCustomPreset,
   deleteProfileCustomPreset,
   listProfileCustomPresets,
 } from "@/lib/capabilities-service";
+import { writeUserMcpDisabledServers } from "@/lib/omp/mcp-config";
 import { CAPABILITY_PRESETS } from "@/lib/capabilities-types";
 import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
@@ -74,32 +76,58 @@ export async function POST(req: Request) {
       );
     }
 
-    // Mode 2: Save capabilities to workspace .omp/config.yml
-    if (!body.cwd || !existsSync(body.cwd)) {
-      return NextResponse.json(
-        { error: "Valid cwd is required", code: "cwd_required" },
-        { status: 400, headers: { ...PROFILE_SCOPED_HEADERS } },
-      );
-    }
+    // Mode 2: Apply capabilities durably.
+    //
+    // MCP toggles belong in the profile's mcp.json `disabledServers`, which is
+    // the list OMP itself honours on every spawn — so they survive reloads and
+    // apply to both web and CLI sessions. Skills keep using the workspace
+    // `.omp/config.yml`, but merged (never overwritten) so unrelated settings
+    // the user put there survive.
+    const mcp = body.capabilities?.disabledMcp
+      ? writeUserMcpDisabledServers(body.capabilities.disabledMcp, ctx)
+      : null;
 
-    const ompDir = join(body.cwd, ".omp");
-    mkdirSync(ompDir, { recursive: true });
-    const configPath = join(ompDir, "config.yml");
+    let configPath: string | null = null;
+    if (body.cwd && existsSync(body.cwd)) {
+      const ompDir = join(body.cwd, ".omp");
+      const target = join(ompDir, "config.yml");
+      const skillsEnabled = body.capabilities?.preset === "chat_only"
+        ? false
+        : body.capabilities?.skills && body.capabilities.skills.length > 0
+          ? true
+          : undefined;
+      const includeSkills = skillsEnabled === true ? body.capabilities?.skills : undefined;
 
-    let yamlContent = "";
-    if (body.capabilities?.preset === "chat_only") {
-      yamlContent = "skills:\n  enabled: false\n";
-    } else if (body.capabilities?.skills && body.capabilities.skills.length > 0) {
-      const patterns = body.capabilities.skills.map((p) => `    - "${p}"`).join("\n");
-      yamlContent = `skills:\n  enabled: true\n  includeSkills:\n${patterns}\n`;
-    }
-
-    if (yamlContent) {
-      writeFileSync(configPath, yamlContent, "utf8");
+      if (skillsEnabled !== undefined || includeSkills) {
+        let current: Record<string, unknown> = {};
+        if (existsSync(target)) {
+          try {
+            const parsed = parseYaml(readFileSync(target, "utf8"));
+            if (typeof parsed === "object" && parsed !== null) current = parsed as Record<string, unknown>;
+          } catch {
+            // An unreadable config must never be silently replaced.
+            return NextResponse.json(
+              { error: "Existing .omp/config.yml could not be parsed", code: "config_parse_failed" },
+              { status: 409, headers: { ...PROFILE_SCOPED_HEADERS } },
+            );
+          }
+        }
+        const currentSkills = typeof current.skills === "object" && current.skills !== null
+          ? (current.skills as Record<string, unknown>)
+          : {};
+        current.skills = {
+          ...currentSkills,
+          ...(skillsEnabled !== undefined ? { enabled: skillsEnabled } : {}),
+          ...(includeSkills ? { includeSkills } : {}),
+        };
+        mkdirSync(ompDir, { recursive: true });
+        writeFileSync(target, stringifyYaml(current), "utf8");
+        configPath = target;
+      }
     }
 
     return NextResponse.json(
-      { success: true, configPath },
+      { success: true, configPath, mcpConfigPath: mcp?.path ?? null, disabledMcp: mcp?.disabledServers ?? null },
       { headers: { ...PROFILE_SCOPED_HEADERS } },
     );
   } catch (error) {

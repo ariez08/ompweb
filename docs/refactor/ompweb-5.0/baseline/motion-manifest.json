@@ -43,7 +43,7 @@
       "dur:dur-slow": "320ms",
       "dur:dur-theme": "450ms"
     },
-    "transitionDeclarations": 39,
+    "transitionDeclarations": 40,
     "reducedMotionBlocks": [
       {
         "line": 1716,
@@ -92,7 +92,7 @@
       "inlineTransitions": 2
     },
     "components/AppShell.tsx": {
-      "inlineTransitions": 8,
+      "inlineTransitions": 9,
       "inlineAnimations": [
         "session-info-pop",
         "session-info-light-wash",

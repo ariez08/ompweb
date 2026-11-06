@@ -3037,6 +3037,10 @@ html.dark .dropdown-surface :is(select, option) {
     min-width var(--dur-med) var(--ease-out-warm),
     opacity var(--dur-fast) var(--ease-out-warm);
 }
+/* A drag must track the pointer exactly: no easing lag while resizing. */
+.right-panel-container.right-panel-resizing {
+  transition: none;
+}
 .right-panel-container.right-panel-open {
   opacity: 1;
   visibility: visible;

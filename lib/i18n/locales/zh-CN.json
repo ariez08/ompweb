@@ -99,6 +99,8 @@
   "appShell.plugins": "插件",
   "appShell.resizeSidebar": "调整侧边栏大小",
   "appShell.resizeSidebarTitle": "拖动以调整侧边栏大小。双击或按回车键可重置为默认宽度。",
+  "appShell.resizeRightPanel": "调整右侧面板大小",
+  "appShell.resizeRightPanelTitle": "拖动以调整右侧面板大小。双击或按回车键可重置为默认宽度。",
   "appShell.sectionMessages": "消息",
   "appShell.sectionSessionInfo": "会话信息",
   "appShell.sectionTokens": "Token",
@@ -1681,198 +1683,198 @@
   "chatWindow.subagentsFilter": "筛选子代理",
   "chatWindow.subagentsSearch": "筛选子代理…",
   "chatWindow.subagentsAll": "全部",
-  "chatWindow.subagentsLive": "运行中"
-  ,"chatWindow.subagentsNoMatches": "没有匹配的子代理"
-  ,"profile.label": "配置文件"
-  ,"profile.sessions": "会话"
-  ,"profile.models": "模型"
-  ,"profile.switchFailed": "无法切换配置文件"
-  ,"profile.readOnly": "只读：切换配置文件后才能打开此会话"
-  ,"boot.starting": "正在启动…"
-  ,"motion.title": "动画与动效"
-  ,"motion.description": "管理全站交互动效、边框流光与跳动动画开关"
-  ,"motion.globalToggle": "全局动效总开关"
-  ,"motion.globalToggleDesc": "开启或关闭全站所有动态效果与过渡动画"
-  ,"motion.borderBeam": "对话框边框流光"
-  ,"motion.borderBeamDesc": "对话响应中沿输入框边缘顺时针流淌"
-  ,"motion.speedUltraSlow": "极慢 (8.0s)"
-  ,"motion.speedSlow": "慢速 (5.5s)"
-  ,"motion.speedStandard": "标准 (3.8s)"
-  ,"motion.speedFast": "快速 (2.2s)"
-  ,"motion.ompBouncing": "OMP 字符跳动动效"
-  ,"motion.ompBouncingDesc": "等待响应时 o·m·p 字母独立循环跳动"
-  ,"motion.thinkingPulse": "思考脑波呼吸动效"
-  ,"motion.thinkingPulseDesc": "模型深度思考状态图标脉冲"
-  ,"diagnostics.centerTitle": "系统诊断与自愈中心"
-  ,"diagnostics.centerDesc": "集中监控 OMP 引擎、Rust Host 守护进程、会话存储、网络代理与系统资源，并提供一键故障自愈与路径快速定位。"
-  ,"diagnostics.centerDisclaimer": "诊断检测全程在本地环回执行，不采集任何提示词、会话上下文或 API 密钥；自愈操作安全受控，仅针对当前服务管理的子进程。"
-  ,"diagnostics.nodeArch": "Node.js / 架构:"
-  ,"diagnostics.rssMemory": "内存占用 (RSS):"
-  ,"diagnostics.cpuHost": "CPU / 主机:"
-  ,"diagnostics.installStatus": "安装状态:"
-  ,"diagnostics.networkProxy": "网络代理:"
-  ,"diagnostics.toolchain": "工具链:"
-  ,"diagnostics.ipcProtocol": "IPC 协议:"
-  ,"diagnostics.orphanProcesses": "孤立进程:"
-  ,"diagnostics.supervisorStatus": "守护状态:"
-  ,"diagnostics.webBinding": "Web 绑定:"
-  ,"diagnostics.recentFailuresLabel": "近期失败:"
-  ,"diagnostics.conflictingInstances": "冲突实例:"
-  ,"diagnostics.webClient": "Web UI 客户端"
-  ,"diagnostics.webServer": "Next.js 服务端"
-  ,"diagnostics.rustHostDaemon": "Rust Host 守护"
-  ,"diagnostics.ompEngineProcess": "OMP 引擎进程"
-  ,"diagnostics.directMode": "直连模式"
-  ,"diagnostics.installedReady": "已安装就绪"
-  ,"themePicker.tabStatic": "静态"
-  ,"themePicker.tabFlow": "流动"
-  ,"themePicker.tabCustom": "调色"
-  ,"themePicker.tabMotion": "动效"
-  ,"themePicker.tabFont": "字体"
-  ,"themePicker.flowDesc": "动态流动渐变光效 · 呼吸流转"
-  ,"themePicker.presetsTitle": "灵感风格预设"
-  ,"themePicker.renderMode": "渲染模式"
-  ,"themePicker.modeStatic": "静态色彩"
-  ,"themePicker.modeFlow": "流动流光"
-  ,"themePicker.accentColor": "强调色"
-  ,"themePicker.bgColor": "背景底色"
-  ,"themePicker.baseTone": "基底明暗"
-  ,"themePicker.toneLight": "浅色明亮"
-  ,"themePicker.toneDark": "深色暗夜"
-  ,"themePicker.ompLoaderColors": "OMP 字符专属配色"
-  ,"themePicker.beamCycle": "流速周期"
-  ,"themePicker.fontFamily": "字体预设"
-  ,"themePicker.fontSize": "对话字号大小"
-  ,"themePicker.sizeCompact": "精简 (12px)"
-  ,"themePicker.sizeStandard": "标准 (14px)"
-  ,"themePicker.sizeLarge": "超大 (20px)"
-  ,"themePicker.presetCyberNeon": "赛博霓虹"
-  ,"themePicker.presetAuroraGreen": "极光翠绿"
-  ,"themePicker.presetDraculaPurple": "德古拉紫"
-  ,"themePicker.presetBlazingGold": "烈焰流金"
-  ,"themePicker.presetCherrySnow": "樱落暮雪"
-  ,"themePicker.presetPureBlack": "纯黑极曜"
-  ,"themePicker.presetWarmJournal": "暖阳手帐"
-  ,"themePicker.presetOatLatte": "燕麦拿铁"
-  ,"diagnostics.issueOmpTitle": "OMP 未安装"
-  ,"diagnostics.issueOmpDetail": "安装 omp 后再重试。"
-  ,"diagnostics.issueHostTitle": "Rust host 不可用"
-  ,"diagnostics.issueHostDetail": "清理孤儿 host 并重新探测，不会重启正在运行的会话。"
-  ,"diagnostics.issueOrphanTitle": "发现孤儿 host"
-  ,"diagnostics.issueOrphanDetail": "孤儿进程可能占用锁或 PTY。"
-  ,"diagnostics.issueRpcTitle": "RPC 会话失败"
-  ,"diagnostics.issueRpcDetail": "{count} 次最近失败；重启只影响活动 RPC 会话。"
-  ,"diagnostics.issueErrorsTitle": "后端错误记录"
-  ,"diagnostics.issueErrorsDetail": "{count} 条错误仍在错误环中。"
-  ,"diagnostics.issueProxyTitle": "代理未生效"
-  ,"diagnostics.issueProxyDetail": "当前为自动代理模式，但没有可用端点；请检查代理客户端或改为手动配置。"
-  ,"diagnostics.restartFailed": "重启失败"
-  ,"diagnostics.clearErrorsFailed": "清除错误失败"
-  ,"diagnostics.repairFailed": "自愈修复失败"
-  ,"reveal.showInFileManager": "在访达中显示"
-  ,"reveal.locating": "定位中…"
-  ,"reveal.opened": "已在系统文件管理器中打开"
-  ,"reveal.failed": "定位失败"
-  ,"diagnostics.stopInstanceFailed": "清理冲突实例失败"
-  ,"diagnostics.stopFailed": "清理失败"
-  ,"diagnostics.fullIssueOmpTitle": "OMP 引擎缺失"
-  ,"diagnostics.fullIssueOmpDetail": "系统路径下未检测到 omp 可执行文件，代理核心功能受限。"
-  ,"diagnostics.fullIssueHostTitle": "Rust Host 守护进程异常"
-  ,"diagnostics.fullIssueHostDetail": "Host 未就绪或发生崩溃，一键修复将清理孤立进程并自动重新拉起。"
-  ,"diagnostics.fullIssueOrphanTitle": "检测到 {count} 个孤立 Host 进程"
-  ,"diagnostics.fullIssueOrphanDetail": "孤儿进程可能占用系统会话锁或伪终端句柄，建议及时回收。"
-  ,"diagnostics.repairOrphans": "清理孤立进程"
-  ,"diagnostics.fullIssueRpcTitle": "近期有 {count} 次 RPC 会话失败"
-  ,"diagnostics.fullIssueRpcDetail": "可能由模型子进程异常终止引起，重启 RPC 可恢复所有断开通道。"
-  ,"diagnostics.fullIssueInstanceTitle": "检测到端口冲突实例 (127.0.0.1:{port})"
-  ,"diagnostics.fullIssueInstanceDetail": "另一 ompweb 实例正在运行，可能产生会话并发读写竞争或锁冲突。"
-  ,"diagnostics.allOperational": "所有服务运行正常"
-  ,"diagnostics.needsAttention": "系统运行有警告"
-  ,"diagnostics.criticalFailure": "后端服务异常"
-  ,"diagnostics.pollingEvery30s": "自动轮询: 每 30 秒"
-  ,"diagnostics.probing": "探测中…"
-  ,"diagnostics.oneClickRepair": "一键无损修复"
-  ,"diagnostics.runtimeTopology": "运行时拓扑"
-  ,"diagnostics.systemPaths": "系统路径"
-  ,"capabilities.applyCustom": "应用更改"
-  ,"capabilities.customActiveCount": "{tools} 个工具 · {mcp} 个 MCP · {skills} 个技能"
-  ,"capabilities.customMcpTitle": "MCP 服务"
-  ,"capabilities.customSkillsTitle": "技能"
-  ,"capabilities.customToolsTitle": "工具与执行"
-  ,"capabilities.deletePresetTitle": "删除已保存预设"
-  ,"capabilities.noMcpFound": "工作区或配置方案中未配置 MCP 服务。"
-  ,"capabilities.noSkillsFound": "工作区中未发现技能。"
-  ,"capabilities.presetDeleted": "预设 \"{name}\" 已删除"
-  ,"capabilities.presetNamePlaceholder": "预设名称（如 database-only、no-bash）"
-  ,"capabilities.presetSaved": "预设 \"{name}\" 已保存到配置方案"
-  ,"capabilities.savePresetButton": "保存预设"
-  ,"capabilities.savePresetTitle": "保存为方案预设"
-  ,"capabilities.selectAll": "全选"
-  ,"capabilities.selectNone": "全不选"
-  ,"capabilities.skillFilterPlaceholder": "技能匹配通配符（例如 git-*、bpjs-*）"
-  ,"capabilities.tabCustom": "自定义与 MCP"
-  ,"capabilities.tabPresets": "预设方案"
-  ,"profileManager.active": "使用中"
-  ,"profileManager.autoSwitch": "创建后立即切换到该方案"
-  ,"profileManager.cancel": "取消"
-  ,"profileManager.cannotDeleteActive": "无法删除当前正在使用的方案，请先切换到其他方案。"
-  ,"profileManager.cannotDeleteDefault": "无法删除默认方案"
-  ,"profileManager.clone": "复制"
-  ,"profileManager.cloneTitle": "复制此方案"
-  ,"profileManager.close": "关闭"
-  ,"profileManager.componentsAll": "全部"
-  ,"profileManager.componentsNone": "全部剔除"
-  ,"profileManager.componentsTitle": "要复制的组件"
-  ,"profileManager.configureTitle": "配置方案"
-  ,"profileManager.copy": "复制"
-  ,"profileManager.create": "新建配置方案"
-  ,"profileManager.createFailed": "创建配置方案失败"
-  ,"profileManager.createTitle": "新建配置方案"
-  ,"profileManager.created": "配置方案 \"{profile}\" 创建成功"
-  ,"profileManager.creating": "创建中..."
-  ,"profileManager.currentlyInUse": "正在使用"
-  ,"profileManager.default": "默认"
-  ,"profileManager.deleteConfirm": "删除方案 \"{profile}\"？此操作无法撤销。"
-  ,"profileManager.deleteFailed": "删除配置方案失败"
-  ,"profileManager.deleteTitle": "删除方案"
-  ,"profileManager.deleted": "方案 \"{profile}\" 已删除"
-  ,"profileManager.editingProfile": "正在编辑方案:"
-  ,"profileManager.fileAgents": "AI 指令"
-  ,"profileManager.fileConfig": "模型角色"
-  ,"profileManager.fileMcp": "MCP 插件"
-  ,"profileManager.fileModels": "模型注册表"
-  ,"profileManager.fileRules": "系统规则"
-  ,"profileManager.loadDetailsFailed": "加载方案详情失败"
-  ,"profileManager.loadFailed": "加载配置方案失败 (HTTP {status})"
-  ,"profileManager.loadingFiles": "正在加载配置文件..."
-  ,"profileManager.models": "模型:"
-  ,"profileManager.nameHint": "仅限字母、数字、连字符与下划线（最多 32 个字符）。"
-  ,"profileManager.nameLabel": "方案名称"
-  ,"profileManager.namePlaceholder": "例如 backend-dev、reviewer、fast-agent"
-  ,"profileManager.refresh": "刷新"
-  ,"profileManager.refreshTitle": "刷新配置方案"
-  ,"profileManager.saveChanges": "保存更改"
-  ,"profileManager.saveFailed": "保存配置失败"
-  ,"profileManager.saveHint": "更改将直接保存到 ~/.omp/profiles/{profile}/agent/"
-  ,"profileManager.saved": "方案 \"{profile}\" 的配置已保存"
-  ,"profileManager.saving": "保存中..."
-  ,"profileManager.sessions": "会话:"
-  ,"profileManager.strip": "剔除"
-  ,"profileManager.subtitle": "管理隔离的 OMP 工作区、配置、模型角色与人格。"
-  ,"profileManager.switchFailed": "无法切换配置方案"
-  ,"profileManager.switchTo": "切换到此方案"
-  ,"profileManager.switched": "已将活动方案切换为 \"{profile}\""
-  ,"profileManager.switching": "切换中..."
-  ,"profileManager.tabAgents": "指令 (AGENTS.md)"
-  ,"profileManager.tabMcp": "MCP 插件 (mcp.json)"
-  ,"profileManager.tabModels": "模型 (models.yml)"
-  ,"profileManager.tabRoles": "模型角色 (config.yml)"
-  ,"profileManager.tabRules": "规则 (RULES.md)"
-  ,"profileManager.templateClone": "复制自: {profile}"
-  ,"profileManager.templateDefault": "默认方案 (~/.omp/agent)"
-  ,"profileManager.templateEmpty": "干净初始模板"
-  ,"profileManager.templateLabel": "模板 / 复制来源"
-  ,"profileManager.title": "OMP 配置方案"
-  ,"settingsTabs.profiles.description": "管理 OMP 配置方案、设置、模型角色与人设"
-  ,"settingsTabs.profiles.label": "OMP 配置方案"
+  "chatWindow.subagentsLive": "运行中",
+  "chatWindow.subagentsNoMatches": "没有匹配的子代理",
+  "profile.label": "配置文件",
+  "profile.sessions": "会话",
+  "profile.models": "模型",
+  "profile.switchFailed": "无法切换配置文件",
+  "profile.readOnly": "只读：切换配置文件后才能打开此会话",
+  "boot.starting": "正在启动…",
+  "motion.title": "动画与动效",
+  "motion.description": "管理全站交互动效、边框流光与跳动动画开关",
+  "motion.globalToggle": "全局动效总开关",
+  "motion.globalToggleDesc": "开启或关闭全站所有动态效果与过渡动画",
+  "motion.borderBeam": "对话框边框流光",
+  "motion.borderBeamDesc": "对话响应中沿输入框边缘顺时针流淌",
+  "motion.speedUltraSlow": "极慢 (8.0s)",
+  "motion.speedSlow": "慢速 (5.5s)",
+  "motion.speedStandard": "标准 (3.8s)",
+  "motion.speedFast": "快速 (2.2s)",
+  "motion.ompBouncing": "OMP 字符跳动动效",
+  "motion.ompBouncingDesc": "等待响应时 o·m·p 字母独立循环跳动",
+  "motion.thinkingPulse": "思考脑波呼吸动效",
+  "motion.thinkingPulseDesc": "模型深度思考状态图标脉冲",
+  "diagnostics.centerTitle": "系统诊断与自愈中心",
+  "diagnostics.centerDesc": "集中监控 OMP 引擎、Rust Host 守护进程、会话存储、网络代理与系统资源，并提供一键故障自愈与路径快速定位。",
+  "diagnostics.centerDisclaimer": "诊断检测全程在本地环回执行，不采集任何提示词、会话上下文或 API 密钥；自愈操作安全受控，仅针对当前服务管理的子进程。",
+  "diagnostics.nodeArch": "Node.js / 架构:",
+  "diagnostics.rssMemory": "内存占用 (RSS):",
+  "diagnostics.cpuHost": "CPU / 主机:",
+  "diagnostics.installStatus": "安装状态:",
+  "diagnostics.networkProxy": "网络代理:",
+  "diagnostics.toolchain": "工具链:",
+  "diagnostics.ipcProtocol": "IPC 协议:",
+  "diagnostics.orphanProcesses": "孤立进程:",
+  "diagnostics.supervisorStatus": "守护状态:",
+  "diagnostics.webBinding": "Web 绑定:",
+  "diagnostics.recentFailuresLabel": "近期失败:",
+  "diagnostics.conflictingInstances": "冲突实例:",
+  "diagnostics.webClient": "Web UI 客户端",
+  "diagnostics.webServer": "Next.js 服务端",
+  "diagnostics.rustHostDaemon": "Rust Host 守护",
+  "diagnostics.ompEngineProcess": "OMP 引擎进程",
+  "diagnostics.directMode": "直连模式",
+  "diagnostics.installedReady": "已安装就绪",
+  "themePicker.tabStatic": "静态",
+  "themePicker.tabFlow": "流动",
+  "themePicker.tabCustom": "调色",
+  "themePicker.tabMotion": "动效",
+  "themePicker.tabFont": "字体",
+  "themePicker.flowDesc": "动态流动渐变光效 · 呼吸流转",
+  "themePicker.presetsTitle": "灵感风格预设",
+  "themePicker.renderMode": "渲染模式",
+  "themePicker.modeStatic": "静态色彩",
+  "themePicker.modeFlow": "流动流光",
+  "themePicker.accentColor": "强调色",
+  "themePicker.bgColor": "背景底色",
+  "themePicker.baseTone": "基底明暗",
+  "themePicker.toneLight": "浅色明亮",
+  "themePicker.toneDark": "深色暗夜",
+  "themePicker.ompLoaderColors": "OMP 字符专属配色",
+  "themePicker.beamCycle": "流速周期",
+  "themePicker.fontFamily": "字体预设",
+  "themePicker.fontSize": "对话字号大小",
+  "themePicker.sizeCompact": "精简 (12px)",
+  "themePicker.sizeStandard": "标准 (14px)",
+  "themePicker.sizeLarge": "超大 (20px)",
+  "themePicker.presetCyberNeon": "赛博霓虹",
+  "themePicker.presetAuroraGreen": "极光翠绿",
+  "themePicker.presetDraculaPurple": "德古拉紫",
+  "themePicker.presetBlazingGold": "烈焰流金",
+  "themePicker.presetCherrySnow": "樱落暮雪",
+  "themePicker.presetPureBlack": "纯黑极曜",
+  "themePicker.presetWarmJournal": "暖阳手帐",
+  "themePicker.presetOatLatte": "燕麦拿铁",
+  "diagnostics.issueOmpTitle": "OMP 未安装",
+  "diagnostics.issueOmpDetail": "安装 omp 后再重试。",
+  "diagnostics.issueHostTitle": "Rust host 不可用",
+  "diagnostics.issueHostDetail": "清理孤儿 host 并重新探测，不会重启正在运行的会话。",
+  "diagnostics.issueOrphanTitle": "发现孤儿 host",
+  "diagnostics.issueOrphanDetail": "孤儿进程可能占用锁或 PTY。",
+  "diagnostics.issueRpcTitle": "RPC 会话失败",
+  "diagnostics.issueRpcDetail": "{count} 次最近失败；重启只影响活动 RPC 会话。",
+  "diagnostics.issueErrorsTitle": "后端错误记录",
+  "diagnostics.issueErrorsDetail": "{count} 条错误仍在错误环中。",
+  "diagnostics.issueProxyTitle": "代理未生效",
+  "diagnostics.issueProxyDetail": "当前为自动代理模式，但没有可用端点；请检查代理客户端或改为手动配置。",
+  "diagnostics.restartFailed": "重启失败",
+  "diagnostics.clearErrorsFailed": "清除错误失败",
+  "diagnostics.repairFailed": "自愈修复失败",
+  "reveal.showInFileManager": "在访达中显示",
+  "reveal.locating": "定位中…",
+  "reveal.opened": "已在系统文件管理器中打开",
+  "reveal.failed": "定位失败",
+  "diagnostics.stopInstanceFailed": "清理冲突实例失败",
+  "diagnostics.stopFailed": "清理失败",
+  "diagnostics.fullIssueOmpTitle": "OMP 引擎缺失",
+  "diagnostics.fullIssueOmpDetail": "系统路径下未检测到 omp 可执行文件，代理核心功能受限。",
+  "diagnostics.fullIssueHostTitle": "Rust Host 守护进程异常",
+  "diagnostics.fullIssueHostDetail": "Host 未就绪或发生崩溃，一键修复将清理孤立进程并自动重新拉起。",
+  "diagnostics.fullIssueOrphanTitle": "检测到 {count} 个孤立 Host 进程",
+  "diagnostics.fullIssueOrphanDetail": "孤儿进程可能占用系统会话锁或伪终端句柄，建议及时回收。",
+  "diagnostics.repairOrphans": "清理孤立进程",
+  "diagnostics.fullIssueRpcTitle": "近期有 {count} 次 RPC 会话失败",
+  "diagnostics.fullIssueRpcDetail": "可能由模型子进程异常终止引起，重启 RPC 可恢复所有断开通道。",
+  "diagnostics.fullIssueInstanceTitle": "检测到端口冲突实例 (127.0.0.1:{port})",
+  "diagnostics.fullIssueInstanceDetail": "另一 ompweb 实例正在运行，可能产生会话并发读写竞争或锁冲突。",
+  "diagnostics.allOperational": "所有服务运行正常",
+  "diagnostics.needsAttention": "系统运行有警告",
+  "diagnostics.criticalFailure": "后端服务异常",
+  "diagnostics.pollingEvery30s": "自动轮询: 每 30 秒",
+  "diagnostics.probing": "探测中…",
+  "diagnostics.oneClickRepair": "一键无损修复",
+  "diagnostics.runtimeTopology": "运行时拓扑",
+  "diagnostics.systemPaths": "系统路径",
+  "capabilities.applyCustom": "应用更改",
+  "capabilities.customActiveCount": "{tools} 个工具 · {mcp} 个 MCP · {skills} 个技能",
+  "capabilities.customMcpTitle": "MCP 服务",
+  "capabilities.customSkillsTitle": "技能",
+  "capabilities.customToolsTitle": "工具与执行",
+  "capabilities.deletePresetTitle": "删除已保存预设",
+  "capabilities.noMcpFound": "工作区或配置方案中未配置 MCP 服务。",
+  "capabilities.noSkillsFound": "工作区中未发现技能。",
+  "capabilities.presetDeleted": "预设 \"{name}\" 已删除",
+  "capabilities.presetNamePlaceholder": "预设名称（如 database-only、no-bash）",
+  "capabilities.presetSaved": "预设 \"{name}\" 已保存到配置方案",
+  "capabilities.savePresetButton": "保存预设",
+  "capabilities.savePresetTitle": "保存为方案预设",
+  "capabilities.selectAll": "全选",
+  "capabilities.selectNone": "全不选",
+  "capabilities.skillFilterPlaceholder": "技能匹配通配符（例如 git-*、bpjs-*）",
+  "capabilities.tabCustom": "自定义与 MCP",
+  "capabilities.tabPresets": "预设方案",
+  "profileManager.active": "使用中",
+  "profileManager.autoSwitch": "创建后立即切换到该方案",
+  "profileManager.cancel": "取消",
+  "profileManager.cannotDeleteActive": "无法删除当前正在使用的方案，请先切换到其他方案。",
+  "profileManager.cannotDeleteDefault": "无法删除默认方案",
+  "profileManager.clone": "复制",
+  "profileManager.cloneTitle": "复制此方案",
+  "profileManager.close": "关闭",
+  "profileManager.componentsAll": "全部",
+  "profileManager.componentsNone": "全部剔除",
+  "profileManager.componentsTitle": "要复制的组件",
+  "profileManager.configureTitle": "配置方案",
+  "profileManager.copy": "复制",
+  "profileManager.create": "新建配置方案",
+  "profileManager.createFailed": "创建配置方案失败",
+  "profileManager.createTitle": "新建配置方案",
+  "profileManager.created": "配置方案 \"{profile}\" 创建成功",
+  "profileManager.creating": "创建中...",
+  "profileManager.currentlyInUse": "正在使用",
+  "profileManager.default": "默认",
+  "profileManager.deleteConfirm": "删除方案 \"{profile}\"？此操作无法撤销。",
+  "profileManager.deleteFailed": "删除配置方案失败",
+  "profileManager.deleteTitle": "删除方案",
+  "profileManager.deleted": "方案 \"{profile}\" 已删除",
+  "profileManager.editingProfile": "正在编辑方案:",
+  "profileManager.fileAgents": "AI 指令",
+  "profileManager.fileConfig": "模型角色",
+  "profileManager.fileMcp": "MCP 插件",
+  "profileManager.fileModels": "模型注册表",
+  "profileManager.fileRules": "系统规则",
+  "profileManager.loadDetailsFailed": "加载方案详情失败",
+  "profileManager.loadFailed": "加载配置方案失败 (HTTP {status})",
+  "profileManager.loadingFiles": "正在加载配置文件...",
+  "profileManager.models": "模型:",
+  "profileManager.nameHint": "仅限字母、数字、连字符与下划线（最多 32 个字符）。",
+  "profileManager.nameLabel": "方案名称",
+  "profileManager.namePlaceholder": "例如 backend-dev、reviewer、fast-agent",
+  "profileManager.refresh": "刷新",
+  "profileManager.refreshTitle": "刷新配置方案",
+  "profileManager.saveChanges": "保存更改",
+  "profileManager.saveFailed": "保存配置失败",
+  "profileManager.saveHint": "更改将直接保存到 ~/.omp/profiles/{profile}/agent/",
+  "profileManager.saved": "方案 \"{profile}\" 的配置已保存",
+  "profileManager.saving": "保存中...",
+  "profileManager.sessions": "会话:",
+  "profileManager.strip": "剔除",
+  "profileManager.subtitle": "管理隔离的 OMP 工作区、配置、模型角色与人格。",
+  "profileManager.switchFailed": "无法切换配置方案",
+  "profileManager.switchTo": "切换到此方案",
+  "profileManager.switched": "已将活动方案切换为 \"{profile}\"",
+  "profileManager.switching": "切换中...",
+  "profileManager.tabAgents": "指令 (AGENTS.md)",
+  "profileManager.tabMcp": "MCP 插件 (mcp.json)",
+  "profileManager.tabModels": "模型 (models.yml)",
+  "profileManager.tabRoles": "模型角色 (config.yml)",
+  "profileManager.tabRules": "规则 (RULES.md)",
+  "profileManager.templateClone": "复制自: {profile}",
+  "profileManager.templateDefault": "默认方案 (~/.omp/agent)",
+  "profileManager.templateEmpty": "干净初始模板",
+  "profileManager.templateLabel": "模板 / 复制来源",
+  "profileManager.title": "OMP 配置方案",
+  "settingsTabs.profiles.description": "管理 OMP 配置方案、设置、模型角色与人设",
+  "settingsTabs.profiles.label": "OMP 配置方案"
 }

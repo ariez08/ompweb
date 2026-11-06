@@ -20,7 +20,7 @@ import { toast } from "@/components/ui/toast";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { createMessageUpdateCoalescer, type MessageUpdateCoalescer } from "@/lib/message-update-coalescer";
 import { getToolNamesForPreset, type ToolPreset } from "@/lib/tool-presets";
-import { getPreferredToolPreset, setPreferredToolPreset } from "@/lib/tool-preset-preference";
+import { getPreferredToolPreset, setPreferredToolPreset, getPreferredCapabilities, setPreferredCapabilities } from "@/lib/tool-preset-preference";
 import { expandWebSlashCommand } from "@/lib/web-slash-commands";
 import { validateOutgoingPrompt } from "@/lib/image-attachments";
 import { createActiveGoal, parseActiveGoal, type ActiveGoal, type ActivePlan } from "@/lib/web-mode-state";
@@ -658,19 +658,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
   const [toolPreset, setToolPreset] = useState<ToolPreset>(() => getPreferredToolPreset());
-  const [capabilities, setCapabilities] = useState<SessionCapabilities>(() => {
-    const preferred = getPreferredToolPreset();
-    if (preferred === "none") return { preset: "chat_only", tools: [], skills: [] };
-    if (preferred === "default") return { preset: "code_editor", tools: ["read", "edit", "write", "bash", "glob", "grep"] };
-    return { preset: "full_agent" };
-  });
+  const [capabilities, setCapabilities] = useState<SessionCapabilities>(() => getPreferredCapabilities());
   const pendingCapabilitiesNoticeRef = useRef<string | null>(null);
 
   const handleCapabilitiesChange = useCallback(async (newCaps: SessionCapabilities, saveToWorkspace = false) => {
     setCapabilities(newCaps);
-    if (newCaps.preset === "chat_only") setPreferredToolPreset("none");
-    else if (newCaps.preset === "code_editor") setPreferredToolPreset("default");
-    else if (newCaps.preset === "full_agent") setPreferredToolPreset("full");
+    // Persist the full selection (including custom tool/MCP lists), not just a
+    // coarse preset, so reopening the app restores what the user actually chose.
+    setPreferredCapabilities(newCaps);
 
     const activeTools = newCaps.tools?.join(", ") ?? "all";
     const activeSkills = newCaps.skills?.join(", ") ?? "all";
@@ -698,16 +693,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }).catch(() => {});
     }
 
-    if (saveToWorkspace && (session?.cwd || newSessionCwd)) {
-      await fetch("/api/capabilities", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          cwd: session?.cwd || newSessionCwd,
-          capabilities: newCaps,
-        }),
-      }).catch(() => {});
-    }
+    // MCP toggles are profile-level OMP settings (mcp.json `disabledServers`),
+    // so they are written on every change instead of only with "save to
+    // workspace" — otherwise the switch would be cosmetic.
+    const workspaceCwd = saveToWorkspace ? session?.cwd || newSessionCwd : null;
+    await fetch("/api/capabilities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(workspaceCwd ? { cwd: workspaceCwd } : {}),
+        capabilities: newCaps,
+      }),
+    }).catch(() => {});
   }, [session?.id, session?.cwd, newSessionCwd, translate]);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("auto");
   const [fastModeEnabled, setFastModeEnabled] = useState(false);
@@ -1361,7 +1358,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       ensuringNewSessionRef.current = null;
     }
-  }, [advisorEnabled, isNew, newSessionCwd, newSessionModel, newSessionDefaultModel, toolPreset, thinkingLevel]);
+  }, [advisorEnabled, isNew, newSessionCwd, newSessionModel, newSessionDefaultModel, capabilities.tools, capabilities.skills, capabilities.disabledMcp, thinkingLevel]);
 
   // The system panel may initialize a dormant session, but must not create a
   // prompt or model run just to inspect the resolved system prompt.

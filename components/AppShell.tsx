@@ -63,9 +63,12 @@ const THINKING_DISPLAY_MODE_STORAGE_KEY = "omp-web:thinking-display-mode";
 export type ThinkingDisplayMode = "auto" | "collapsed" | "expanded";
 const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 520;
-/** Right workbench floor.  The rail is intentionally not draggable; its only
- * structural affordance is the explicit upper/lower split inside the panel. */
-const RIGHT_PANEL_MIN_WIDTH = 180;
+/** Right workbench rail: desktop-only resizable column holding the files /
+ * agents / side-chat / browser surfaces. */
+const RIGHT_PANEL_MIN_WIDTH = 220;
+const RIGHT_PANEL_MAX_WIDTH = 900;
+const RIGHT_PANEL_DEFAULT_WIDTH = 480;
+const RIGHT_PANEL_WIDTH_STORAGE_KEY = "omp-web:right-panel-width";
 const SIDEBAR_DEFAULT_WIDTH = 260;
 const GITHUB_TRIGGER_DEFAULT_TOP = 72;
 const GITHUB_TRIGGER_STORAGE_KEY = "omp-web:github-trigger-top";
@@ -73,6 +76,12 @@ const GITHUB_TRIGGER_MIN_TOP = 48;
 const GITHUB_TRIGGER_HEIGHT = 40;
 function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+/** Keep at least 360px of chat visible, so the rail can never swallow the
+ * conversation column on a narrow viewport. */
+function clampRightPanelWidth(width: number, viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth): number {
+  const ceiling = Math.max(RIGHT_PANEL_MIN_WIDTH, Math.min(RIGHT_PANEL_MAX_WIDTH, viewportWidth - 360));
+  return Math.min(ceiling, Math.max(RIGHT_PANEL_MIN_WIDTH, Math.round(width)));
 }
 
 /** The floating Git handle is deliberately free on the vertical axis, but it
@@ -203,18 +212,36 @@ export function AppShell() {
   // Quick-script "run in terminal": { text, nonce } bumps trigger the terminal
   // to type the command + Enter once the panel session is live.
   const [terminalRunCommand, setTerminalRunCommand] = useState<{ text: string; nonce: number } | null>(null);
-  // Keep the last known width for continuity with existing installs, but do
-  // not expose a drag handle: the workbench rail is structurally fixed now.
-  const [rightPanelWidth] = useState<number>(() => {
-    if (typeof window === "undefined") return 480;
+  // Workbench rail width. The rail is user-resizable on desktop: the drag
+  // handle writes the width straight to the DOM for a jank-free drag and the
+  // committed value is persisted so the choice survives reloads.
+  const [rightPanelWidth, setRightPanelWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return RIGHT_PANEL_DEFAULT_WIDTH;
     try {
-      const raw = localStorage.getItem("omp-right-panel-width");
-      const parsed = raw ? Number(raw) : 480;
-      return Number.isFinite(parsed) ? Math.min(640, Math.max(360, parsed)) : 480;
+      const raw = localStorage.getItem(RIGHT_PANEL_WIDTH_STORAGE_KEY);
+      const parsed = raw ? Number(raw) : RIGHT_PANEL_DEFAULT_WIDTH;
+      return Number.isFinite(parsed) ? clampRightPanelWidth(parsed) : RIGHT_PANEL_DEFAULT_WIDTH;
     } catch {
-      return 480;
+      return RIGHT_PANEL_DEFAULT_WIDTH;
     }
   });
+  const [rightPanelResizing, setRightPanelResizing] = useState(false);
+  const rightPanelContainerRef = useRef<HTMLDivElement>(null);
+  const rightPanelResizeHandlersRef = useRef<{ onMove: (ev: MouseEvent) => void; onUp: () => void } | null>(null);
+  const pendingRightPanelWidthRef = useRef<number>(RIGHT_PANEL_DEFAULT_WIDTH);
+  const rightPanelWidthMountedRef = useRef(false);
+  useEffect(() => {
+    if (!rightPanelWidthMountedRef.current) {
+      rightPanelWidthMountedRef.current = true;
+      return;
+    }
+    if (rightPanelResizing) return;
+    try {
+      window.localStorage.setItem(RIGHT_PANEL_WIDTH_STORAGE_KEY, String(rightPanelWidth));
+    } catch {
+      // ignore storage quota / privacy-mode errors
+    }
+  }, [rightPanelWidth, rightPanelResizing]);
   // Live subagent roster lifted from the active ChatWindow (session-scoped).
   const [subagents, setSubagents] = useState<SubagentInfo[] | null>(null);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentInfo | null>(null);
@@ -625,6 +652,61 @@ export function AppShell() {
     window.removeEventListener("mousemove", handlers.onMove);
     window.removeEventListener("mouseup", handlers.onUp);
     sidebarResizeHandlersRef.current = null;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }, []);
+
+  // Right workbench drag. Same shape as the sidebar drag: the live width goes
+  // to the DOM, and only the committed value reaches React state.
+  const handleRightPanelResizeStart = useCallback((e: React.MouseEvent) => {
+    if (isMobile) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = rightPanelWidth;
+    setRightPanelResizing(true);
+    const onMove = (ev: MouseEvent) => {
+      // Dragging left widens the right rail.
+      const next = clampRightPanelWidth(startWidth - (ev.clientX - startX));
+      rightPanelContainerRef.current?.style.setProperty("width", `${next}px`);
+      rightPanelContainerRef.current?.style.setProperty("min-width", `${next}px`);
+      pendingRightPanelWidthRef.current = next;
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      rightPanelResizeHandlersRef.current = null;
+      setRightPanelResizing(false);
+      setRightPanelWidth(pendingRightPanelWidthRef.current);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    pendingRightPanelWidthRef.current = startWidth;
+    rightPanelResizeHandlersRef.current = { onMove, onUp };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [isMobile, rightPanelWidth]);
+
+  const handleRightPanelResizeKey = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setRightPanelWidth((prev) => clampRightPanelWidth(prev + 10));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setRightPanelWidth((prev) => clampRightPanelWidth(prev - 10));
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setRightPanelWidth(RIGHT_PANEL_DEFAULT_WIDTH);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    const handlers = rightPanelResizeHandlersRef.current;
+    if (!handlers) return;
+    window.removeEventListener("mousemove", handlers.onMove);
+    window.removeEventListener("mouseup", handlers.onUp);
+    rightPanelResizeHandlersRef.current = null;
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
   }, []);
@@ -2194,7 +2276,8 @@ export function AppShell() {
       {/* Native right workbench. It opens to a calm empty state and supports
           one explicit upper/lower split; terminal stays in the bottom bar. */}
         <div
-          className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}`}
+          ref={rightPanelContainerRef}
+          className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelResizing ? " right-panel-resizing" : ""}`}
           style={{
             display: "flex",
             flexDirection: "column",
@@ -2202,7 +2285,7 @@ export function AppShell() {
             background: "var(--bg)",
             // Keep a readable chat column when the panel is resized.
             width: rightPanelOpen ? (isMobile ? "100%" : `${rightPanelWidth}px`) : 0,
-            minWidth: rightPanelOpen ? (isMobile ? 0 : RIGHT_PANEL_MIN_WIDTH) : 0,
+            minWidth: rightPanelOpen ? (isMobile ? 0 : `${rightPanelWidth}px`) : 0,
             maxWidth: rightPanelOpen && !isMobile ? "calc(100vw - 360px)" : undefined,
             position: "relative",
           }}
@@ -2240,6 +2323,34 @@ export function AppShell() {
             )}
           />
         </div>
+
+      {/* Right rail resize handle — desktop only, while the rail is open. */}
+      {!isMobile && rightPanelOpen && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("appShell.resizeRightPanel")}
+          tabIndex={0}
+          onMouseDown={handleRightPanelResizeStart}
+          onDoubleClick={() => setRightPanelWidth(RIGHT_PANEL_DEFAULT_WIDTH)}
+          onKeyDown={handleRightPanelResizeKey}
+          title={t("appShell.resizeRightPanelTitle")}
+          style={{
+            width: 5,
+            flexShrink: 0,
+            marginRight: -5,
+            cursor: "col-resize",
+            background: "transparent",
+            zIndex: 205,
+            outline: "none",
+            transition: "background var(--dur-fast) var(--ease-out-warm)",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--accent) 35%, transparent)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+          onFocus={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--accent) 35%, transparent)"; }}
+          onBlur={(e) => { e.currentTarget.style.background = "transparent"; }}
+        />
+      )}
       {/* File panel toggle — always visible at top-right */}
       <button
         onClick={() => {
