@@ -1168,11 +1168,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   // always Stop when streaming (queued follow-ups are still submitted via
   // Enter / the queued-follow-up bar). Previously a typed message replaced
   // Stop with a Queue button, so clicking what looked like Stop did nothing.
-  const primaryActionQueuesMessage =
-    !isStreaming
-    && Boolean(value.trim())
-    && attachedImages.length === 0
-    && Boolean(onFollowUp);
+  const defaultRunBehavior = getSubmitDuringRunBehavior();
 
   // ── Queued follow-up bar ────────────────────────────────────────────────
   // omp reports only a queued count over RPC; the texts are tracked in a
@@ -1388,10 +1384,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         if (isMobile && !mobileEnterToSend) return;
         e.preventDefault();
         if (isStreaming && (onSteer || onFollowUp)) {
-          // Submit-during-run behavior comes from Settings (Steer current run
-          // by default, or Queue follow-up); no in-composer selector.
           const behavior = getSubmitDuringRunBehavior();
-          if (behavior === "steer" && onSteer) sendQueued("steer");
+          const isModifier = e.ctrlKey || e.metaKey || e.altKey;
+          const mode: "steer" | "followup" = isModifier
+            ? (behavior === "steer" ? "followup" : "steer")
+            : (behavior === "steer" ? "steer" : "followup");
+          if (mode === "steer" && onSteer) sendQueued("steer");
           else sendQueued("followup");
         } else {
           handleSend();
@@ -2871,53 +2869,90 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </button>
             )}
 
-            {/* Primary action: Send (idle) / Queue (typed while running) / Stop (running) */}
-            {primaryActionQueuesMessage ? (
-              <button
-                type="button"
-                onClick={() => sendQueued("followup")}
-                title={t("chatInput.queueMessage")}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  height: 28,
-                  padding: "0 14px",
-                  background: "var(--accent-strong)",
-                  border: "none",
-                  borderRadius: 8,
-                  color: "var(--on-accent)",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  transition: "background var(--dur-fast) var(--ease-out-warm)",
-                }}
-              >
-                <ListChecks size={13} strokeWidth={2} aria-hidden="true" />
-                {t("chatInput.queue")}
-              </button>
-            ) : isStreaming ? (
-              <button
-                type="button"
-                onClick={isCompacting ? onAbortCompaction : onAbort}
-                title={t("chatInput.stopAgent")}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  height: 28,
-                  padding: "0 14px",
-                  background: "var(--accent-strong)",
-                  border: "none",
-                  borderRadius: 8,
-                  color: "var(--on-accent)",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  transition: "background var(--dur-fast) var(--ease-out-warm)",
-                }}
-              >
-                <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-                  <rect x="1.5" y="1.5" width="7" height="7" rx="1.5" fill="currentColor" />
-                </svg>
-                {t("chatInput.stop")}
-              </button>
+            {/* Primary action: Send (idle) / Steer + Queue + Stop (running) */}
+            {isStreaming ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {Boolean(value.trim() || attachedImages.length) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => sendQueued("steer")}
+                      disabled={isCompacting}
+                      title={`${t("chatInput.steerNowTitle")} (${defaultRunBehavior === "steer" ? "Enter" : "Ctrl+Enter"})`}
+                      aria-label={t("chatInput.steer")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        height: 28,
+                        padding: "0 10px",
+                        background: defaultRunBehavior === "steer" ? "var(--accent)" : "transparent",
+                        border: defaultRunBehavior === "steer" ? "none" : "1px solid var(--accent)",
+                        borderRadius: 8,
+                        color: defaultRunBehavior === "steer" ? "var(--on-accent)" : "var(--accent)",
+                        cursor: isCompacting ? "not-allowed" : "pointer",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        transition: "all var(--dur-fast) var(--ease-out-warm)",
+                      }}
+                    >
+                      <Zap size={12} strokeWidth={2.2} aria-hidden="true" />
+                      {t("chatInput.steer")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => sendQueued("followup")}
+                      disabled={isCompacting}
+                      title={`${t("chatInput.queueMessage")} (${defaultRunBehavior === "queue" ? "Enter" : "Ctrl+Enter"})`}
+                      aria-label={t("chatInput.queue")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        height: 28,
+                        padding: "0 10px",
+                        background: defaultRunBehavior === "queue" ? "var(--accent-strong)" : "transparent",
+                        border: defaultRunBehavior === "queue" ? "none" : "1px solid var(--border)",
+                        borderRadius: 8,
+                        color: defaultRunBehavior === "queue" ? "var(--on-accent)" : "var(--text)",
+                        cursor: isCompacting ? "not-allowed" : "pointer",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        transition: "all var(--dur-fast) var(--ease-out-warm)",
+                      }}
+                    >
+                      <ListChecks size={13} strokeWidth={2} aria-hidden="true" />
+                      {t("chatInput.queue")}
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={isCompacting ? onAbortCompaction : onAbort}
+                  title={t("chatInput.stopAgent")}
+                  aria-label={t("chatInput.stopAgent")}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    height: 28,
+                    padding: "0 12px",
+                    background: "var(--accent-strong)",
+                    border: "none",
+                    borderRadius: 8,
+                    color: "var(--on-accent)",
+                    cursor: "pointer",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    transition: "background var(--dur-fast) var(--ease-out-warm)",
+                  }}
+                >
+                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                    <rect x="1.5" y="1.5" width="7" height="7" rx="1.5" fill="currentColor" />
+                  </svg>
+                  {t("chatInput.stop")}
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
