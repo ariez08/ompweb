@@ -448,106 +448,104 @@ function TreeNode({
         {loading && (
           <Loader2 size={10} strokeWidth={2} color="var(--text-dim)" style={{ animation: "spin 0.8s linear infinite", flexShrink: 0 }} aria-hidden="true" />
         )}
-        {onAtMention && hovered && (
-          <Tooltip content={mentionLabel}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 3,
+            flexShrink: 0,
+            marginLeft: "auto",
+          }}
+        >
+          {onAtMention && hovered && (
+            <Tooltip content={mentionLabel}>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAtMention(getRelativeFilePath(node.fullPath, cwd), node.isDir);
+                }}
+                aria-label={mentionLabel}
+                title={mentionLabel}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 22,
+                  height: 20,
+                  background: "var(--bg-panel)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-control)",
+                  color: "var(--accent)",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
+                }}
+              >
+                <AtSign size={12} strokeWidth={2.2} aria-hidden="true" />
+              </button>
+            </Tooltip>
+          )}
+
+          {hovered && !node.isDir && (
+            <Tooltip content={downloadLabel}>
+              <a
+                href={`/api/files/${encodeFilePathForApi(node.fullPath)}?type=download`}
+                download
+                onClick={(e) => e.stopPropagation()}
+                aria-label={downloadLabel}
+                title={downloadLabel}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 22,
+                  height: 20,
+                  background: "var(--bg-panel)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-control)",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  textDecoration: "none",
+                  transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
+                }}
+              >
+                <Download size={11} strokeWidth={2.2} aria-hidden="true" />
+              </a>
+            </Tooltip>
+          )}
+
+          {/* Always-visible "show in file manager" action — placed at the far right */}
+          <Tooltip content={revealLabel}>
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onAtMention(getRelativeFilePath(node.fullPath, cwd), node.isDir);
+                void revealInFileManager(node.fullPath);
               }}
-              aria-label={mentionLabel}
+              aria-label={revealLabel}
+              title={revealLabel}
               style={{
-                position: "absolute",
-                right: !node.isDir ? 28 : 4,
-                top: "50%",
-                transform: "translateY(-50%)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: 4,
-                padding: "0 8px",
-                height: 20,
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-control)",
-                color: "var(--accent)",
-                cursor: "pointer",
-                fontSize: 11,
-                fontWeight: 600,
-                whiteSpace: "nowrap",
-                transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
-              }}
-            >
-              <AtSign size={11} strokeWidth={2.2} aria-hidden="true" />
-              {t("fileExplorer.mention")}
-            </button>
-          </Tooltip>
-        )}
-        {/* Always-visible "show in file manager" action — not gated on hover
-            so the entry point is discoverable at a glance. */}
-        <Tooltip content={revealLabel}>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              void revealInFileManager(node.fullPath);
-            }}
-            aria-label={revealLabel}
-            title={revealLabel}
-            style={{
-              position: "absolute",
-              right: node.isDir ? 4 : 52,
-              top: "50%",
-              transform: "translateY(-50%)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 22,
-              height: 20,
-              background: "var(--bg-panel)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-control)",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
-            }}
-            >
-            <FolderSearch size={11} strokeWidth={2} aria-hidden="true" />
-          </button>
-        </Tooltip>
-        {hovered && !node.isDir && (
-          <Tooltip content={downloadLabel}>
-            <a
-              href={`/api/files/${encodeFilePathForApi(node.fullPath)}?type=download`}
-              download
-              onClick={(e) => e.stopPropagation()}
-              aria-label={downloadLabel}
-              style={{
-                position: "absolute",
-                right: 4,
-                top: "50%",
-                transform: "translateY(-50%)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 4,
-                padding: "0 5px",
+                width: 22,
                 height: 20,
                 background: "var(--bg-panel)",
                 border: "1px solid var(--border)",
                 borderRadius: "var(--radius-control)",
                 color: "var(--text-muted)",
                 cursor: "pointer",
-                fontSize: 11,
-                fontWeight: 600,
-                whiteSpace: "nowrap",
-                textDecoration: "none",
                 transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
               }}
             >
-              <Download size={11} strokeWidth={2.2} aria-hidden="true" />
-            </a>
+              <FolderSearch size={11} strokeWidth={2} aria-hidden="true" />
+            </button>
           </Tooltip>
-        )}
+        </div>
       </div>
       {node.isDir && (
         <div role="group" inert={!open ? true : undefined} className={"accordion-flow " + (open ? "is-open" : "")}>
