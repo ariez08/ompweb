@@ -188,6 +188,18 @@ function saveExpandedProjects(paths: Set<string>): void {
   }
 }
 
+const EXPLORER_OPEN_STORAGE_KEY = "omp-web:explorer-open";
+
+function loadExplorerOpen(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const raw = window.localStorage.getItem(EXPLORER_OPEN_STORAGE_KEY);
+    return raw === "true";
+  } catch {
+    return false;
+  }
+}
+
 /** Substitute the home dir prefix with ~ (no path truncation — see PathLabel) */
 function displayCwd(cwd: string, homeDir?: string): string {
   return (homeDir && cwd.startsWith(homeDir)) ? "~" + cwd.slice(homeDir.length) : cwd;
@@ -819,7 +831,7 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
   const [wtConfirmRemove, setWtConfirmRemove] = useState<string | null>(null);
   const wtToggleRef = useRef<HTMLButtonElement>(null);
   const wtNewInputRef = useRef<HTMLInputElement>(null);
-  const [explorerOpen, setExplorerOpen] = useState(true);
+  const [explorerOpen, setExplorerOpen] = useState(() => loadExplorerOpen());
   const [explorerKey, setExplorerKey] = useState(0);
   const [explorerUploadBusy, setExplorerUploadBusy] = useState(false);
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
@@ -2326,7 +2338,17 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
         >
           <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
             <button
-              onClick={() => setExplorerOpen((v) => !v)}
+              onClick={() => {
+                setExplorerOpen((prev) => {
+                  const next = !prev;
+                  try {
+                    window.localStorage.setItem(EXPLORER_OPEN_STORAGE_KEY, String(next));
+                  } catch {
+                    // ignore
+                  }
+                  return next;
+                });
+              }}
               style={{
                 display: "flex",
                 alignItems: "center",
