@@ -14,7 +14,7 @@ import { ChatWindow } from "./ChatWindow";
 import { TabBar, type Tab } from "./TabBar";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
-import { Check, CircleCheck, FolderGit2, GitBranch, History, Menu, Moon, PanelLeft, Search, Sun, Terminal, TerminalSquare, Wand2, X } from "lucide-react";
+import { Check, CircleCheck, ExternalLink, FolderGit2, GitBranch, History, Menu, Moon, PanelLeft, Search, Sun, Terminal, TerminalSquare, Wand2, X } from "lucide-react";
 import { ThemePicker } from "./ThemePicker";
 import { DesktopUpdateBanner } from "./DesktopUpdateBanner";
 import { OmpSetupWizard } from "./OmpSetupWizard";
@@ -123,19 +123,45 @@ function PanelLoadingFallback() {
   );
 }
 
-function UpdateToast({ currentVersion, availableVersion, command }: {
+function UpdateToast({ currentVersion, availableVersion, command, onOpenSettings }: {
   currentVersion: string | null | undefined;
   availableVersion: string;
   command: string;
+  onOpenSettings?: () => void;
 }) {
   const { t } = useI18n();
   return (
     <>
       <div>{t("appShell.updateVersion", { current: currentVersion ?? "?", available: availableVersion })}</div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <code style={{ background: "var(--bg-panel)", padding: "3px 7px", borderRadius: "var(--radius-control)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
-          {command}
-        </code>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+        {onOpenSettings ? (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            title={t("appShell.openUpdateSettings")}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "3px 8px",
+              border: "1px solid var(--accent)",
+              borderRadius: "var(--radius-control)",
+              background: "var(--accent-subtle, var(--bg-panel))",
+              color: "var(--accent)",
+              cursor: "pointer",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              fontWeight: 500,
+            }}
+          >
+            {command}
+            <ExternalLink size={10} aria-hidden="true" />
+          </button>
+        ) : (
+          <code style={{ background: "var(--bg-panel)", padding: "3px 7px", borderRadius: "var(--radius-control)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+            {command}
+          </code>
+        )}
         <button
           type="button"
           onClick={() => {
@@ -147,6 +173,15 @@ function UpdateToast({ currentVersion, availableVersion, command }: {
         >
           {t("appShell.copyCommand")}
         </button>
+        {onOpenSettings && (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            style={{ padding: "3px 7px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontSize: 11 }}
+          >
+            {t("appShell.openSettings")}
+          </button>
+        )}
       </div>
     </>
   );
@@ -356,9 +391,21 @@ export function AppShell() {
           setOmpUpdateAvailable(Boolean(data?.updateAvailable));
           if (!data?.updateAvailable || !data.availableVersion) return;
           const cmd = data.updateCommand || "omp update";
-          toast.info(
+          const toastHandle = { id: "" };
+          const openSystemSettings = () => {
+            if (toastHandle.id) toast.close(toastHandle.id);
+            setSettingsTab("system");
+          };
+          toastHandle.id = toast.info(
             <UpdateToastTitle product="omp" />,
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}><UpdateToast currentVersion={data.currentVersion} availableVersion={data.availableVersion} command={cmd} /></div>,
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+              <UpdateToast
+                currentVersion={data.currentVersion}
+                availableVersion={data.availableVersion}
+                command={cmd}
+                onOpenSettings={openSystemSettings}
+              />
+            </div>,
             { variant: "update" },
           );
         })
@@ -395,9 +442,21 @@ export function AppShell() {
         }
         if (!data?.updateAvailable || !data.availableVersion) return;
         const cmd = data.updateCommand || "npm install -g @37chengshan/ompweb";
-        toast.info(
+        const toastHandle = { id: "" };
+        const openSystemSettings = () => {
+          if (toastHandle.id) toast.close(toastHandle.id);
+          setSettingsTab("system");
+        };
+        toastHandle.id = toast.info(
           <UpdateToastTitle product="app" />,
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}><UpdateToast currentVersion={data.currentVersion} availableVersion={data.availableVersion} command={cmd} /></div>,
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+            <UpdateToast
+              currentVersion={data.currentVersion}
+              availableVersion={data.availableVersion}
+              command={cmd}
+              onOpenSettings={openSystemSettings}
+            />
+          </div>,
           { variant: "update" },
         );
       })

@@ -31,6 +31,7 @@ export type BuiltinMcpPreset = {
   name: string;
   displayName: string;
   description: string;
+  descriptionKey?: string;
   author: string;
   version: string;
   tools: string[];
@@ -62,7 +63,8 @@ export function getBuiltinMcpPresets(cwd?: string, ctx: ProfileContext = default
       id: "agentmcp",
       name: "agentmcp",
       displayName: "Agent MCP",
-      description: "原生多 Agent 编排基础设施：统一调度 11+ 款 Agent CLI，支持子任务派发、复杂度分级门、DAG 编排、实时插话与持久记忆银行。",
+      description: "Native multi-agent orchestration infrastructure: unified scheduling for 11+ agent CLIs, supporting subtask dispatch, complexity grading gates, DAG orchestration, real-time intervention, and persistent memory bank.",
+      descriptionKey: "mcpConfig.presetAgentMcpDesc",
       author: "37chengshan",
       version: "v3.0.0",
       tools: [
@@ -82,7 +84,7 @@ export function getBuiltinMcpPresets(cwd?: string, ctx: ProfileContext = default
         type: "stdio",
         command: "python3",
         args: [resolvedTarget],
-        description: "Agent MCP — 任意 Agent CLI 统一调度与多 Agent 编排控制平面",
+        description: "Agent MCP — Unified scheduling and multi-agent orchestration control plane for any agent CLI",
       },
       isAvailable: Boolean(agentMcpPath),
       installedPath: agentMcpPath ?? undefined,

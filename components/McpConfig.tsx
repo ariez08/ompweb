@@ -25,6 +25,7 @@ type BuiltinMcpPreset = {
   name: string;
   displayName: string;
   description: string;
+  descriptionKey?: string;
   author: string;
   version: string;
   tools: string[];
@@ -300,9 +301,13 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
   const enablePreset = async (preset: BuiltinMcpPreset) => {
     setSaving(true);
     try {
+      const configToSave = { ...preset.config };
+      if (preset.id === "agentmcp") {
+        configToSave.description = t("mcpConfig.presetAgentMcpConfigDesc") || configToSave.description;
+      }
       const payload = cwd
-        ? { cwd, name: preset.name, server: preset.config }
-        : { scope: "user", name: preset.name, server: preset.config };
+        ? { cwd, name: preset.name, server: configToSave }
+        : { scope: "user", name: preset.name, server: configToSave };
       const response = await fetch("/api/mcp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -456,8 +461,12 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                         onClick={() => {
                           setSelected(preset.name);
                           setName(preset.name);
-                          syncFormFromConfig(preset.config);
-                          setSource(JSON.stringify(preset.config, null, 2));
+                          const configToEdit = { ...preset.config };
+                          if (preset.id === "agentmcp") {
+                            configToEdit.description = t("mcpConfig.presetAgentMcpConfigDesc") || configToEdit.description;
+                          }
+                          syncFormFromConfig(configToEdit);
+                          setSource(JSON.stringify(configToEdit, null, 2));
                         }}
                         style={{
                           padding: "5px 10px",
@@ -473,7 +482,9 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
                       </button>
                     </div>
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>{preset.description}</div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
+                    {preset.descriptionKey ? t(preset.descriptionKey) : (preset.id === "agentmcp" ? t("mcpConfig.presetAgentMcpDesc") : preset.description)}
+                  </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                     {preset.tools.map((tool) => (
                       <span
