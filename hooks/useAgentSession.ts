@@ -1346,6 +1346,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         body: JSON.stringify({
           cwd: newSessionCwd,
           type: "ensure_session",
+          // /api/agent/new applies provider/modelId before the first prompt,
+          // so a brand-new chat's explicit pick survives: at this point there
+          // is no live child for handleSend's fallback set_model to target.
+          ...(newSessionModel ? { provider: newSessionModel.provider, modelId: newSessionModel.modelId } : {}),
           toolNames,
           skillPatterns,
           disabledMcp,

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, SquareTerminal, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import { ConfirmDialog } from "../ui/field";
 import { TerminalPanel } from "../TerminalPanel";
 
 export interface TerminalTab {
@@ -113,6 +114,11 @@ export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsu
   /** Per-tab queued command ({ text, nonce }) — delivered to the panel's
    *  runCommand prop while that tab is active; consumed once. */
   const [queued, setQueued] = useState<Record<string, { text: string; nonce: number }>>({});
+  /** Backend PTY owned per tab, reported by the panels. A tab whose id is here
+   *  still has a live shell, so closing it must be confirmed instead of
+   *  silently killing whatever the user started in it. */
+  const [ptyByTab, setPtyByTab] = useState<Record<string, string>>({});
+  const [pendingClose, setPendingClose] = useState<{ id: string; label: string } | null>(null);
 
   const openTab = useCallback((targetCwd: string | null, forceNew = false, activate = true): string => {
     // Reuse an existing tab with the same cwd when present (quick-script
@@ -172,7 +178,7 @@ export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runCommand, open, cwd]);
 
-  const closeTab = useCallback((id: string) => {
+  const removeTab = useCallback((id: string) => {
     setTabs((prev) => {
       const idx = prev.findIndex((tab) => tab.id === id);
       if (idx === -1) return prev;
@@ -190,7 +196,25 @@ export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsu
       delete next[id];
       return next;
     });
+    setPtyByTab((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   }, [activeId]);
+
+  // A tab that still owns a live PTY may be running something the user cares
+  // about: closing it unmounts the panel, which reaps the shell. Confirm first
+  // so "close tab" never silently drops a running command.
+  const requestCloseTab = useCallback((id: string) => {
+    const tab = tabsRef.current.find((entry) => entry.id === id);
+    if (tab && ptyByTab[id]) {
+      setPendingClose({ id, label: tab.label });
+      return;
+    }
+    removeTab(id);
+  }, [ptyByTab, removeTab]);
 
   // Explicit "+" always creates a second terminal in the same cwd — the
   // reuse-by-cwd shortcut is reserved for quick-script routing.
@@ -214,10 +238,13 @@ export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsu
     });
   }, [activeId]);
 
-  if (!open) return null;
-
+  // Never unmount on hide: unmounting a panel reaps its PTY server-side, which
+  // left the shell (and anything it started) running with no tab attached —
+  // the "process still hangs but the terminal is gone" symptom. Hiding only
+  // parks each panel's stream; preserveSession keeps the PTY alive and the
+  // next open reconnects to the same session id with history replay.
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: embedded ? "100%" : `${drawerHeight + 36}px`, minHeight: 0, background: "var(--bg)", overflow: "hidden" }}>
+    <div style={{ display: open ? "flex" : "none", flexDirection: "column", height: embedded ? "100%" : `${drawerHeight + 36}px`, minHeight: 0, background: "var(--bg)", overflow: "hidden" }}>
       {/* Keep-mounted panels; only the active one is visible. */}
       <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
         {tabs.map((tab) => (
@@ -231,12 +258,24 @@ export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsu
           >
             <TerminalPanel
               key={tab.id}
-              open={tab.id === activeId}
+              open={open && tab.id === activeId}
               onClose={onClose}
               cwd={tab.cwd ?? undefined}
               preserveSession
               heightOverride={embedded ? undefined : drawerHeight}
               onHeightChange={handleHeightChange}
+              onSessionIdChange={(sid) => {
+                setPtyByTab((prev) => {
+                  if (!sid) {
+                    if (!(tab.id in prev)) return prev;
+                    const next = { ...prev };
+                    delete next[tab.id];
+                    return next;
+                  }
+                  if (prev[tab.id] === sid) return prev;
+                  return { ...prev, [tab.id]: sid };
+                });
+              }}
               embedded={embedded}
               runCommand={tab.id === activeId && activeQueued ? { ...activeQueued } : null}
             />
@@ -277,7 +316,7 @@ export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsu
               <button
                 type="button"
                 aria-label={`${t("terminal.closeTab") ?? "Close terminal"} ${tab.label}`}
-                onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+                onClick={(e) => { e.stopPropagation(); requestCloseTab(tab.id); }}
                 style={{ display: "inline-flex", padding: 1, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", flexShrink: 0 }}
               >
                 <X size={10} strokeWidth={2} aria-hidden />
@@ -315,6 +354,20 @@ export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsu
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingClose !== null}
+        onOpenChange={(next) => { if (!next) setPendingClose(null); }}
+        title={t("terminal.closeConfirmTitle")}
+        description={t("terminal.closeConfirmBody", { label: pendingClose?.label ?? "" })}
+        confirmLabel={t("terminal.closeConfirmAction")}
+        cancelLabel={t("terminal.closeConfirmCancel")}
+        danger
+        onConfirm={() => {
+          if (pendingClose) removeTab(pendingClose.id);
+          setPendingClose(null);
+        }}
+      />
     </div>
   );
 }

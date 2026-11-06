@@ -26,9 +26,12 @@ interface Props {
   onHeightChange?: (height: number) => void;
   /** Fill a docked workbench pane. The host owns the pane splitter in this mode. */
   embedded?: boolean;
+  /** Reports the backend PTY this panel currently owns (null when none), so
+   *  the host can tell whether closing the tab would kill a live shell. */
+  onSessionIdChange?: (sessionId: string | null) => void;
 }
 
-export function TerminalPanel({ open, onClose, cwd, runCommand, preserveSession = false, heightOverride, onHeightChange, embedded = false }: Props) {
+export function TerminalPanel({ open, onClose, cwd, runCommand, preserveSession = false, heightOverride, onHeightChange, embedded = false, onSessionIdChange }: Props) {
   const { t } = useI18n();
   const { isDark, preference } = useTheme();
   // True between mount and unmount — lets the stream cleanup distinguish a
@@ -136,6 +139,15 @@ export function TerminalPanel({ open, onClose, cwd, runCommand, preserveSession 
       void initSession();
     }
   }, [open, sessionId, initSession]);
+
+  // The host needs to know whether this tab still owns a live PTY so closing
+  // it can warn instead of silently killing a running command. Held in a ref
+  // so a caller passing an inline arrow does not restart the stream effect.
+  const onSessionIdChangeRef = useRef(onSessionIdChange);
+  onSessionIdChangeRef.current = onSessionIdChange;
+  useEffect(() => {
+    onSessionIdChangeRef.current?.(sessionId);
+  }, [sessionId]);
 
   // Setup xterm.js instance
   useEffect(() => {
@@ -289,9 +301,11 @@ export function TerminalPanel({ open, onClose, cwd, runCommand, preserveSession 
           buffer = rest;
           for (const chunk of chunks) {
             if (chunk.includes("[Terminal closed")) {
-              // The server reaped the session; stop reconnecting.
+              // The shell exited on its own (exit, ctrl-D, crash): no live PTY
+              // is left to kill, so closing the tab must not ask to confirm.
               streamDead = true;
               setStatus("disconnected");
+              onSessionIdChangeRef.current?.(null);
             }
             if (xtermInstanceRef.current) {
               xtermInstanceRef.current.write(chunk);
