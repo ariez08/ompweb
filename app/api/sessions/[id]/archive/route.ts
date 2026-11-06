@@ -7,7 +7,7 @@ import {
 } from "@/lib/session-reader";
 import { resolveSessionPathOr404 } from "@/lib/api-utils";
 import { getRpcSession } from "@/lib/rpc-manager";
-import { PROFILE_SCOPED_HEADERS, readProfileCookie, requestProfileContext } from "@/lib/omp/profile-cookie";
+import { PROFILE_SCOPED_HEADERS, readRequestedProfile, requestProfileContext } from "@/lib/omp/profile-cookie";
 import { DEFAULT_PROFILE, isKnownProfile } from "@/lib/omp/profile-context";
 
 /** POST /api/sessions/[id]/archive — stop the live child, then archive the
@@ -21,7 +21,7 @@ export async function POST(
   try {
     // Archiving is a write: an unknown profile cookie must not silently move
     // the session into the default profile's archive root.
-    const wanted = readProfileCookie(req);
+    const wanted = readRequestedProfile(req);
     if (wanted && wanted !== DEFAULT_PROFILE && !isKnownProfile(wanted)) {
       return NextResponse.json(
         { error: `Unknown profile "${wanted}"`, code: "profile_unknown" },

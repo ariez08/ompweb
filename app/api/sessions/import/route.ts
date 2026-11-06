@@ -8,7 +8,7 @@ import { invalidateSessionListCache } from "@/lib/session-reader";
 import { invalidateSessionFileListCache } from "@/lib/omp/session-files";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
-import { PROFILE_SCOPED_HEADERS, readProfileCookie, requestProfileContext } from "@/lib/omp/profile-cookie";
+import { PROFILE_SCOPED_HEADERS, readRequestedProfile, requestProfileContext } from "@/lib/omp/profile-cookie";
 import { DEFAULT_PROFILE, isKnownProfile } from "@/lib/omp/profile-context";
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     // unknown cookie to the process profile for read paths (a stale cookie
     // should not break the UI), but silently landing an import in the default
     // profile would put a transcript where the user never asked for it.
-    const wanted = readProfileCookie(req);
+    const wanted = readRequestedProfile(req);
     if (wanted && wanted !== DEFAULT_PROFILE && !isKnownProfile(wanted)) {
       return NextResponse.json(
         { error: `Unknown profile "${wanted}"; pick an existing profile before importing`, code: "profile_unknown" },

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/api-utils";
 import { listArchivedSessions, restoreArchivedSession } from "@/lib/omp/archive";
 import { invalidateSessionListCache } from "@/lib/session-reader";
-import { PROFILE_SCOPED_HEADERS, readProfileCookie, requestProfileContext } from "@/lib/omp/profile-cookie";
+import { PROFILE_SCOPED_HEADERS, readRequestedProfile, requestProfileContext } from "@/lib/omp/profile-cookie";
 import { DEFAULT_PROFILE, isKnownProfile } from "@/lib/omp/profile-context";
 import type { ArchivedSessionInfo } from "@/lib/types";
 
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
   try {
     // A restore is a write: an unknown profile cookie must not silently land
     // the archive into the default profile's sessions root.
-    const wanted = readProfileCookie(req);
+    const wanted = readRequestedProfile(req);
     if (wanted && wanted !== DEFAULT_PROFILE && !isKnownProfile(wanted)) {
       return NextResponse.json(
         { error: `Unknown profile "${wanted}"`, code: "profile_unknown" },

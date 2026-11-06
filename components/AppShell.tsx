@@ -1,4 +1,5 @@
 "use client";
+import "@/lib/client/tab-profile";
 
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import dynamic from "next/dynamic";

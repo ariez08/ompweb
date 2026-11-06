@@ -20,6 +20,7 @@ import { Archive, Check, ChevronDown, ChevronRight, FileUp, Folder, FolderSearch
 import { publishSessionsChanged } from "@/lib/session-change-bus";
 import { UsageSidebarPanel } from "./UsageSidebarPanel";
 import { ProfileSwitcher } from "./ProfileSwitcher";
+import { setTabProfile } from "@/lib/client/tab-profile";
 
 declare global {
   interface Window {
@@ -1535,6 +1536,7 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
         } else {
           const errData = (await res.json().catch(() => null)) as { code?: string; profile?: string } | null;
           if (errData?.code === "session_wrong_profile" && errData.profile) {
+            setTabProfile(errData.profile);
             const switchRes = await fetch("/api/profile", {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
@@ -1583,6 +1585,7 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
               if (!res.ok) {
                 const errData = (await res.json().catch(() => null)) as { code?: string; profile?: string } | null;
                 if (errData?.code === "session_wrong_profile" && errData.profile) {
+                  setTabProfile(errData.profile);
                   const switchRes = await fetch("/api/profile", {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },

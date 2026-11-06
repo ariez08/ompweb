@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Layers, LoaderCircle } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import { setTabProfile } from "@/lib/client/tab-profile";
 
 interface ProfileSummary {
   profile: string;
@@ -55,6 +56,7 @@ export function ProfileSwitcher({
       .then((data: ProfilesPayload | null) => {
         if (cancelled || !data) return;
         setPayload(data);
+        setTabProfile(data.current);
         onProfileReady?.(data.current);
       })
       .catch(() => undefined);
@@ -84,6 +86,7 @@ export function ProfileSwitcher({
       const body = (await res.json().catch(() => null)) as { profile?: string } | null;
       const resolved = typeof body?.profile === "string" && body.profile ? body.profile : profile;
       setPayload((prev) => (prev ? { ...prev, current: resolved } : prev));
+      setTabProfile(resolved);
       onProfileChange?.(resolved);
       // Reload rather than re-restore in place. Last-session restore is gated by
       // a restored-once ref plus AppShell's boot gate, both of which are

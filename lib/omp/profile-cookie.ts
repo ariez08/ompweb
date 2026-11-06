@@ -20,7 +20,7 @@ export const OMP_WEB_PROFILE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 /** Headers every profile-scoped response must carry. */
 export const PROFILE_SCOPED_HEADERS = {
   "Cache-Control": "no-store",
-  Vary: "Cookie",
+  Vary: "Cookie, x-omp-profile",
 } as const;
 
 /** Raw cookie value, or undefined when absent/blank. No validation here. */
@@ -38,12 +38,30 @@ export function readProfileCookie(request: Request): string | undefined {
 }
 
 /**
- * Resolved profile context for a request. Unknown or malicious values collapse
- * to the process profile rather than erroring, so a stale cookie can never
- * break the UI — it just stops selecting a profile.
+ * Raw requested profile string from query (?profile=), header (x-omp-profile),
+ * or cookie (omp_web_profile). Query and header allow tab-scoped isolation without
+ * cookies clobbering across multiple open tabs.
+ */
+export function readRequestedProfile(request: Request): string | undefined {
+  try {
+    const url = new URL(request.url);
+    const fromQuery = url.searchParams.get("profile");
+    if (fromQuery && fromQuery.trim()) return fromQuery.trim();
+  } catch {
+    // ignore malformed URL
+  }
+  const fromHeader = request.headers.get("x-omp-profile");
+  if (fromHeader && fromHeader.trim()) return fromHeader.trim();
+  return readProfileCookie(request);
+}
+
+/**
+ * Resolved profile context for a request. Checks query, header, and cookie in priority order.
+ * Unknown or malicious values collapse to the process profile rather than erroring,
+ * so a stale value can never break the UI — it just stops selecting a profile.
  */
 export function requestProfileContext(request: Request): ProfileContext {
-  return resolveProfileContext(readProfileCookie(request));
+  return resolveProfileContext(readRequestedProfile(request));
 }
 
 /** Canonical key for a request; use it in every cache/ETag key. */

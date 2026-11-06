@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { setTabProfile } from "@/lib/client/tab-profile";
 import {
   AlertCircle,
   ArrowRightLeft,
@@ -121,6 +122,7 @@ export function ProfileManager() {
         throw new Error(body?.error || t("profileManager.switchFailed"));
       }
       toast.success(t("profileManager.switched", { profile: target }));
+      setTabProfile(target);
       // Reload page to re-bind session list and storage
       window.location.assign(window.location.pathname);
     } catch (err) {
