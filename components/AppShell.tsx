@@ -2273,6 +2273,35 @@ export function AppShell() {
         </div>
       </main>
 
+      {/* Right rail resize handle — desktop only, while the rail is open. Sits right on the border between <main> and the right rail. */}
+      {!isMobile && rightPanelOpen && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("appShell.resizeRightPanel")}
+          tabIndex={0}
+          onMouseDown={handleRightPanelResizeStart}
+          onDoubleClick={() => setRightPanelWidth(RIGHT_PANEL_DEFAULT_WIDTH)}
+          onKeyDown={handleRightPanelResizeKey}
+          title={t("appShell.resizeRightPanelTitle")}
+          style={{
+            width: 8,
+            flexShrink: 0,
+            marginLeft: -4,
+            marginRight: -4,
+            cursor: "col-resize",
+            background: "transparent",
+            zIndex: 205,
+            outline: "none",
+            transition: "background var(--dur-fast) var(--ease-out-warm)",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--accent) 50%, transparent)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+          onFocus={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--accent) 50%, transparent)"; }}
+          onBlur={(e) => { e.currentTarget.style.background = "transparent"; }}
+        />
+      )}
+
       {/* Native right workbench. It opens to a calm empty state and supports
           one explicit upper/lower split; terminal stays in the bottom bar. */}
         <div
@@ -2324,33 +2353,6 @@ export function AppShell() {
           />
         </div>
 
-      {/* Right rail resize handle — desktop only, while the rail is open. */}
-      {!isMobile && rightPanelOpen && (
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label={t("appShell.resizeRightPanel")}
-          tabIndex={0}
-          onMouseDown={handleRightPanelResizeStart}
-          onDoubleClick={() => setRightPanelWidth(RIGHT_PANEL_DEFAULT_WIDTH)}
-          onKeyDown={handleRightPanelResizeKey}
-          title={t("appShell.resizeRightPanelTitle")}
-          style={{
-            width: 5,
-            flexShrink: 0,
-            marginRight: -5,
-            cursor: "col-resize",
-            background: "transparent",
-            zIndex: 205,
-            outline: "none",
-            transition: "background var(--dur-fast) var(--ease-out-warm)",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--accent) 35%, transparent)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-          onFocus={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--accent) 35%, transparent)"; }}
-          onBlur={(e) => { e.currentTarget.style.background = "transparent"; }}
-        />
-      )}
       {/* File panel toggle — always visible at top-right */}
       <button
         onClick={() => {
