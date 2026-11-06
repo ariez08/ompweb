@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "@/lib/i18n";
 import {
   Activity,
@@ -1843,15 +1844,25 @@ export function BackendStatusButton() {
           <span style={{ fontSize: 10, fontWeight: 600, color: "var(--status-error)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "7em" }}>{t("diagnostics.error")}</span>
         )}
       </button>
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <div
           ref={panelRef}
           role="menu"
-          style={{ position: "fixed", zIndex: 1100, top: 46, left: 14, background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: "var(--radius-card)", boxShadow: "var(--shadow-pop)" }}
+          style={{
+            position: "fixed",
+            zIndex: 1100,
+            top: 46,
+            left: 14,
+            background: "var(--bg-panel)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-card)",
+            boxShadow: "var(--shadow-pop)",
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           <BackendDiagnosticsBody />
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
