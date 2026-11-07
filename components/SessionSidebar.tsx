@@ -571,13 +571,18 @@ function SidebarPortalMenu({
     };
   }, [open, computePos, anchor]);
 
-  // Close on outside press / Escape and handle keyboard arrow navigation.
   useEffect(() => {
     if (!open) return;
     const timer = setTimeout(() => {
       const firstBtn = menuRef.current?.querySelector<HTMLButtonElement>("button:not([disabled])");
       firstBtn?.focus();
     }, 0);
+    return () => clearTimeout(timer);
+  }, [open]);
+
+  // Close on outside press / Escape and handle keyboard arrow navigation.
+  useEffect(() => {
+    if (!open) return;
     const onPointerDown = (e: MouseEvent | TouchEvent) => {
       const target = e.target as Node;
       if (anchor.current?.contains(target)) return;
@@ -605,7 +610,6 @@ function SidebarPortalMenu({
     document.addEventListener("touchstart", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      clearTimeout(timer);
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("touchstart", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);

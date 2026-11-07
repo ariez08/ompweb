@@ -8,6 +8,7 @@ import { defaultProfileContext, type ProfileContext, resolveProfileContext } fro
 import { createRpcProcess, type RpcProcessLike } from "./omp/rust-rpc-process";
 import { readNativeSettings } from "./omp/settings-config";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
+import { parseBackgroundJobUpdate } from "./background-jobs";
 import { PRESET_FULL } from "./tool-presets";
 import type {
   BashResultInfo,
@@ -26,6 +27,12 @@ import type { ExtensionWidgetItem } from "./types";
 export interface AgentEvent {
   type: string;
   [key: string]: unknown;
+}
+export interface AgentJobProvenance {
+  id: string;
+  toolCallId: string;
+  state: "running" | "completed" | "failed" | "cancelled";
+  type: "bash" | "eval";
 }
 
 type EventListener = (event: AgentEvent) => void;
@@ -313,6 +320,9 @@ export class AgentSessionWrapper {
   private _sessionId = "";
   private _sessionFile = "";
   private _sessionName: string | undefined;
+  private jobProvenance = new Map<string, AgentJobProvenance>();
+  private conflictingJobIds = new Set<string>();
+  private jobTransitioning = false;
   private proc: RpcProcessLike;
   readonly cwd: string;
   /** Whether the child was spawned with --advisor. The flag is spawn-time
@@ -442,6 +452,8 @@ export class AgentSessionWrapper {
   private handleFrame(frame: RpcFrame): void {
     this.resetIdleTimer();
     const event = frame as AgentEvent;
+    this.captureJobEvent(event);
+
     let refreshSessionList = false;
 
     switch (event.type) {
@@ -606,6 +618,53 @@ export class AgentSessionWrapper {
 
     this.emit(event);
     notifyRunningChange({ refreshSessionList });
+  }
+  private captureJobEvent(event: AgentEvent): void {
+    if (this.restarting || this.jobTransitioning) return;
+    if (event.type === "session_settled") {
+      for (const [id, job] of this.jobProvenance) {
+        if (job.state === "running") this.jobProvenance.delete(id);
+      }
+      return;
+    }
+    if (event.type !== "tool_execution_update" && event.type !== "tool_execution_end") return;
+    const parsed = parseBackgroundJobUpdate({
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      args: event.args,
+      partialResult: event.type === "tool_execution_end" ? (event.result ?? event.partialResult) : event.partialResult,
+    });
+    if (!parsed || this.conflictingJobIds.has(parsed.id)) return;
+    const existing = this.jobProvenance.get(parsed.id);
+    if (existing && existing.toolCallId !== parsed.toolCallId) {
+      this.jobProvenance.delete(parsed.id);
+      this.conflictingJobIds.add(parsed.id);
+      this.emit({ type: "background_jobs_changed" });
+      return;
+    }
+    this.jobProvenance.set(parsed.id, { id: parsed.id, toolCallId: parsed.toolCallId, type: parsed.type, state: parsed.state });
+  }
+
+  private clearJobProvenance(): void {
+    this.jobProvenance.clear();
+    this.conflictingJobIds.clear();
+    this.emit({ type: "background_jobs_reset" });
+  }
+
+  listJobProvenance(): AgentJobProvenance[] {
+    return this.restarting || this.jobTransitioning ? [] : [...this.jobProvenance.values()];
+  }
+
+  async requestJobAction(jobId: string, toolCallId: string, action: "inspect" | "stop"): Promise<void> {
+    const job = this.jobProvenance.get(jobId);
+    if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
+    if (this.jobTransitioning) throw new WebRpcError("Session is changing.", "session_restarting");
+    if (!job || job.toolCallId !== toolCallId || !this.isAlive()) throw new WebRpcError("Job is not available in the live process.", "job_unavailable");
+    if (action === "stop" && job.state !== "running") throw new WebRpcError("Job is not currently running.", "job_not_running");
+    const message = action === "inspect"
+      ? `Read proc://${job.id} and report its status and output.`
+      : `Read proc://${job.id}. If it is the same running ${job.type} job, stop it with proc://${job.id}/kill. Report the result; do not affect other jobs.`;
+    await this.send({ type: this.isRunning() ? "follow_up" : "prompt", message }, { preservePromptTimeout: true });
   }
 
   /** Forget a pending dialog and its expiry timer. */
@@ -1034,6 +1093,7 @@ export class AgentSessionWrapper {
     const state = await this.getStateWithTimeout();
     this.applyIdentity(state);
     if (oldId && oldId !== this._sessionId) {
+      this.clearJobProvenance();
       this.onIdentityChangeCallback?.(oldId, this._sessionId);
     }
     invalidateSessionListCache();
@@ -1051,6 +1111,7 @@ export class AgentSessionWrapper {
     // Stays true for the whole restart so send() rejects commands that would
     // otherwise hit the disposed or half-built child.
     this.restarting = true;
+    this.clearJobProvenance();
     this.unsubscribeFrames?.();
     try {
       await old.dispose();
@@ -1058,7 +1119,6 @@ export class AgentSessionWrapper {
 
       this.extensionStatuses.clear();
       this.extensionWidgets.clear();
-      this.clearPendingUiRequests();
       this.promptRunning = false;
       this.promptDispatchPendingCount = 0;
       this.awaitingAgentStart = false;
@@ -1122,7 +1182,7 @@ export class AgentSessionWrapper {
   }
 
 
-  async send(command: Record<string, unknown>): Promise<unknown> {
+  async send(command: Record<string, unknown>, options: { preservePromptTimeout?: boolean } = {}): Promise<unknown> {
     if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
     if (!this.isAlive()) throw new Error("Session is no longer running");
     this.resetIdleTimer();
@@ -1177,6 +1237,7 @@ export class AgentSessionWrapper {
           this.awaitingAgentStartDeadline = 0;
           notifyRunningChange();
           if (error instanceof RpcCommandTimeoutError || (error instanceof Error && error.name === "RpcCommandTimeoutError")) {
+            if (options.preservePromptTimeout) throw new WebRpcError("The request was not acknowledged and may still run.", "job_control_unacknowledged");
             // The command was never acknowledged. Dispose the child so the
             // next user action is guaranteed to attach a fresh session.
             await this.destroyAndWait();
@@ -1251,23 +1312,37 @@ export class AgentSessionWrapper {
         if (this.bashRunning) {
           throw new Error("Cannot fork while a shell command is running");
         }
-        const result = await this.proc.sendCommand<{ text: string; cancelled: boolean }>({
-          type: "branch",
-          entryId: command.entryId as string,
-        });
-        if (result.cancelled) return { cancelled: true };
-        const newSessionId = await this.refreshIdentityAfterSessionChange();
-        return { cancelled: false, newSessionId };
+        if (this.jobTransitioning) throw new WebRpcError("Session is changing.", "session_restarting");
+        this.jobTransitioning = true;
+        this.clearJobProvenance();
+        try {
+          const result = await this.proc.sendCommand<{ text: string; cancelled: boolean }>({
+            type: "branch",
+            entryId: command.entryId as string,
+          });
+          if (result.cancelled) return { cancelled: true };
+          const newSessionId = await this.refreshIdentityAfterSessionChange();
+          return { cancelled: false, newSessionId };
+        } finally {
+          this.jobTransitioning = false;
+        }
       }
 
       case "new_session":
       case "switch_session": {
-        const result = await this.proc.sendCommand<{ cancelled: boolean }>(command as { type: string });
-        if (!result.cancelled) {
-          const newSessionId = await this.refreshIdentityAfterSessionChange();
-          return { cancelled: false, newSessionId };
+        if (this.jobTransitioning) throw new WebRpcError("Session is changing.", "session_restarting");
+        this.jobTransitioning = true;
+        this.clearJobProvenance();
+        try {
+          const result = await this.proc.sendCommand<{ cancelled: boolean }>(command as { type: string });
+          if (!result.cancelled) {
+            const newSessionId = await this.refreshIdentityAfterSessionChange();
+            return { cancelled: false, newSessionId };
+          }
+          return result;
+        } finally {
+          this.jobTransitioning = false;
         }
-        return result;
       }
 
       case "compact": {
@@ -1431,6 +1506,8 @@ export class AgentSessionWrapper {
     }
     this.unsubscribeFrames?.();
     this.clearPendingUiRequests();
+    this.jobProvenance.clear();
+    this.conflictingJobIds.clear();
     this.promptDispatchPendingCount = 0;
     this.awaitingAgentStart = false;
     this.awaitingAgentStartDeadline = 0;

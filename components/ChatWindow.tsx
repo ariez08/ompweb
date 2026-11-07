@@ -57,7 +57,8 @@ interface Props {
    *  Called with the latest roster array reference on every change and with
    *  null when this session view unmounts (session switch). */
   onSubagentsChange?: (roster: SubagentInfo[] | null) => void;
-  onBackgroundJobsChange?: (value: { jobs: BackgroundJob[]; error: string | null } | null) => void;
+  onBackgroundJobsChange?: (value: { sessionId: string | null; jobs: BackgroundJob[]; error: string | null; connected: boolean; revision: number } | null) => void;
+  onNavigateToolCallReady?: (navigate: ((toolCallId: string) => boolean) | null) => void;
   onSessionLockChange?: (info: { kind: "cli" | "web" | "idle"; pid?: number | null }) => void;
 }
 
@@ -493,7 +494,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
     </>
   );
 });
-export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onModelCapacityChange, onGenerationSpeedChange, onOpenFile, onOpenPlan, onSubagentsChange, onBackgroundJobsChange, onSessionLockChange }: Props) {
+export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onModelCapacityChange, onGenerationSpeedChange, onOpenFile, onOpenPlan, onSubagentsChange, onBackgroundJobsChange, onNavigateToolCallReady, onSessionLockChange }: Props) {
   const { t, tn } = useI18n();
   const isMobile = useIsMobile();
   // The minimap sits over the transcript's right edge on desktop. Reserve its
@@ -522,7 +523,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
   }, [chatInputRef]);
 
   const {
-    loading, error, messages, backgroundJobs, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
+    loading, error, messages, backgroundJobs, backgroundJobsConnected, backgroundJobsRevision, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, capabilities, handleCapabilitiesChange, thinkingLevel, fastModeEnabled, fastModeActive,
     liveModelMeta,
     retryInfo, contextUsage, forkingEntryId,
@@ -867,6 +868,49 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
       applyPendingAnchor();
     }, 300);
   }, [layout, scrollContainerRef, applyPendingAnchor]);
+  const [pendingToolCall, setPendingToolCall] = useState<{ id: string; groupIndex: number } | null>(null);
+  const navigateToolCall = useCallback((toolCallId: string): boolean => {
+    const sourceIndex = messages.findIndex((message) => message.role === "assistant"
+      && message.content.some((block) => block.type === "toolCall" && block.toolCallId === toolCallId));
+    if (sourceIndex < 0) return false;
+    const groupIndex = groups.findIndex((group) =>
+      group.userIdx === sourceIndex || group.processIndices.includes(sourceIndex)
+      || group.tailIndices.includes(sourceIndex) || group.finalAssistantIdx === sourceIndex);
+    if (groupIndex < 0) return false;
+    setPendingToolCall({ id: toolCallId, groupIndex });
+    scrollToGroupForIndex(groupIndex);
+    return true;
+  }, [groups, messages, scrollToGroupForIndex]);
+  useEffect(() => {
+    if (!pendingToolCall) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const group = container.querySelector<HTMLElement>(`[data-vg="${pendingToolCall.groupIndex}"]`);
+    if (!group) return;
+    const selector = `[data-tool-call-id="${CSS.escape(pendingToolCall.id)}"]`;
+    const scrollToTarget = () => {
+      const target = group.querySelector<HTMLElement>(selector);
+      if (!target) return false;
+      pendingAnchorRef.current = null;
+      if (anchorRetryTimerRef.current !== null) {
+        clearTimeout(anchorRetryTimerRef.current);
+        anchorRetryTimerRef.current = null;
+      }
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      setPendingToolCall(null);
+      return true;
+    };
+    if (scrollToTarget()) return;
+    const observer = new MutationObserver(scrollToTarget);
+    observer.observe(group, { childList: true, subtree: true });
+    const toggle = group.querySelector<HTMLButtonElement>(".process-details-toggle");
+    if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
+    return () => observer.disconnect();
+  }, [pendingToolCall, layoutRevision, scrollTop, scrollContainerRef]);
+  useEffect(() => {
+    onNavigateToolCallReady?.(navigateToolCall);
+    return () => onNavigateToolCallReady?.(null);
+  }, [navigateToolCall, onNavigateToolCallReady]);
   useEffect(() => () => {
     if (anchorRetryTimerRef.current !== null) clearTimeout(anchorRetryTimerRef.current);
   }, []);
@@ -947,8 +991,8 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
   }, [subagents, onSubagentsChange]);
   useEffect(() => () => { onSubagentsChange?.(null); }, [onSubagentsChange]);
   useEffect(() => {
-    onBackgroundJobsChange?.(loading ? null : { jobs: backgroundJobs, error });
-  }, [backgroundJobs, error, loading, onBackgroundJobsChange]);
+    onBackgroundJobsChange?.(loading ? null : { sessionId: session?.id ?? null, jobs: backgroundJobs, error, connected: backgroundJobsConnected, revision: backgroundJobsRevision });
+  }, [backgroundJobs, backgroundJobsConnected, backgroundJobsRevision, error, loading, onBackgroundJobsChange, session?.id]);
   useEffect(() => () => { onBackgroundJobsChange?.(null); }, [onBackgroundJobsChange]);
 
   // Push context usage up to AppShell as well.
@@ -1232,7 +1276,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
             no minimap and users need the scrollbar. `scrollbar-width:none` is
             Firefox-only; .chat-scroll-view also kills the WebKit/WKWebView
             scrollbar that otherwise overlaps the minimap. */}
-        <div ref={scrollContainerRef} onScroll={handleScroll} className={`flex-1 overflow-y-auto pt-6` + (isMobile ? "" : " chat-scroll-view")}>
+        <div ref={scrollContainerRef} onScroll={handleScroll} className={`flex-1 overflow-y-auto pt-6 chat-scroll-container` + (isMobile ? "" : " chat-scroll-view")}>
           <div style={{ padding: chatColumnPadding }}>
             <div style={{ maxWidth: CHAT_COLUMN_MAX_WIDTH, margin: "0 auto" }}>
               <ExtensionStatusBar statuses={extensionStatuses} />

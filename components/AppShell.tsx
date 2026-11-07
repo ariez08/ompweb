@@ -281,7 +281,8 @@ export function AppShell() {
   }, [rightPanelWidth, rightPanelResizing]);
   // Live subagent roster lifted from the active ChatWindow (session-scoped).
   const [subagents, setSubagents] = useState<SubagentInfo[] | null>(null);
-  const [backgroundJobs, setBackgroundJobs] = useState<{ jobs: BackgroundJob[]; error: string | null } | null>(null);
+  const [backgroundJobs, setBackgroundJobs] = useState<{ sessionId: string | null; jobs: BackgroundJob[]; error: string | null; connected: boolean; revision: number } | null>(null);
+  const navigateToolCallRef = useRef<((toolCallId: string) => boolean) | null>(null);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentInfo | null>(null);
   useEffect(() => {
     // A transcript belongs to one parent session. Never leave a detail view
@@ -2260,6 +2261,7 @@ export function AppShell() {
               onOpenPlan={() => selectedSession && handleOpenPlan(selectedSession.id)}
               onSubagentsChange={setSubagents}
               onBackgroundJobsChange={setBackgroundJobs}
+              onNavigateToolCallReady={(navigate) => { navigateToolCallRef.current = navigate; }}
               onSessionLockChange={setSessionLockState}
             />
           ) : initialCwdStatus === "validating" ? (
@@ -2420,7 +2422,7 @@ export function AppShell() {
             )}
             jobs={(
               <PanelErrorBoundary title={t("rightWorkbench.jobs")} unavailable={t("rightPanel.unavailable")} retryLabel={t("rightPanel.retry")}>
-                <JobsPanel jobs={backgroundJobs?.jobs ?? null} sessionId={selectedSession?.id ?? null} error={backgroundJobs?.error ?? null} />
+                <JobsPanel jobs={backgroundJobs && selectedSession && backgroundJobs.sessionId === selectedSession.id ? backgroundJobs.jobs : null} connected={Boolean(backgroundJobs && selectedSession && backgroundJobs.sessionId === selectedSession.id && backgroundJobs.connected)} revision={backgroundJobs && selectedSession && backgroundJobs.sessionId === selectedSession.id ? backgroundJobs.revision : 0} sessionId={selectedSession?.id ?? null} error={backgroundJobs && selectedSession && backgroundJobs.sessionId === selectedSession.id ? backgroundJobs.error : null} onNavigateSource={(toolCallId) => navigateToolCallRef.current?.(toolCallId) ?? false} />
               </PanelErrorBoundary>
             )}
           />

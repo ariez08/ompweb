@@ -45,7 +45,7 @@ export function parseBackgroundJobUpdate(event: {
     toolCallId: event.toolCallId,
     type: event.toolName,
     state,
-    command: typeof command === "string" ? command.slice(0, 300) : "",
+    command: typeof command === "string" ? command : "",
     output: typeof text === "string" ? text.slice(-500) : "",
   };
 }
@@ -58,7 +58,7 @@ export function projectBackgroundJobs(messages: AgentMessage[], updates: Record<
       for (const block of message.content) {
         if (block.type !== "toolCall" || (block.toolName !== "bash" && block.toolName !== "eval")) continue;
         const command = block.toolName === "bash" ? block.input.command : block.input.code;
-        calls.set(block.toolCallId, typeof command === "string" ? command.slice(0, 300) : "");
+        calls.set(block.toolCallId, typeof command === "string" ? command : "");
       }
     } else if (message.role === "toolResult" && (message.toolName === "bash" || message.toolName === "eval")) {
       const parsed = parseBackgroundJobUpdate({
@@ -68,7 +68,7 @@ export function projectBackgroundJobs(messages: AgentMessage[], updates: Record<
         partialResult: message,
       });
       if (!parsed) continue;
-      jobs.set(parsed.id, {
+      jobs.set(parsed.toolCallId, {
         id: parsed.id,
         toolCallId: parsed.toolCallId,
         type: parsed.type,
@@ -79,8 +79,8 @@ export function projectBackgroundJobs(messages: AgentMessage[], updates: Record<
     }
   }
   for (const update of Object.values(updates)) {
-    const previous = jobs.get(update.id);
-    jobs.set(update.id, {
+    const previous = jobs.get(update.toolCallId);
+    jobs.set(update.toolCallId, {
       id: update.id,
       toolCallId: update.toolCallId,
       type: update.type,

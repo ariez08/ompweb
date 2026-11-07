@@ -29,6 +29,7 @@ import { isRecord } from "@/lib/type-guards";
 import type { SessionCapabilities } from "@/lib/capabilities-types";
 import { setTabProfile } from "@/lib/client/tab-profile";
 import { parseBackgroundJobUpdate, projectBackgroundJobs, type BackgroundJobUpdate } from "@/lib/background-jobs";
+import { listBackgroundJobs } from "@/lib/workbench-client";
 // Stable across renders and HMR: the default transport for every hook instance.
 const defaultHttpClient: OmpwebClient = createHttpSseClient();
 import {
@@ -641,8 +642,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [backgroundJobUpdates, setBackgroundJobUpdates] = useState<Record<string, BackgroundJobUpdate>>({});
+  const [backgroundJobsConnected, setBackgroundJobsConnected] = useState(false);
+  const [backgroundJobsRevision, setBackgroundJobsRevision] = useState(0);
+  const backgroundJobRevisionRef = useRef<Record<string, { toolCallId: string; state: string }>>({});
+  const bumpBackgroundJobsRevision = useCallback(() => setBackgroundJobsRevision((revision) => revision + 1), []);
   const backgroundJobs = useMemo(() => projectBackgroundJobs(messages, backgroundJobUpdates), [messages, backgroundJobUpdates]);
-  useEffect(() => { setBackgroundJobUpdates({}); }, [session?.id]);
+  useEffect(() => {
+    setBackgroundJobUpdates({});
+    backgroundJobRevisionRef.current = {};
+    setBackgroundJobsConnected(false);
+    setBackgroundJobsRevision(0);
+  }, [session?.id]);
   const [entryIds, setEntryIds] = useState<string[]>([]);
   const [showPreCompactionHistory, setShowPreCompactionHistory] = useState(false);
   const [streamState, dispatch] = useReducer(streamReducer, { isStreaming: false, streamingMessage: null });
@@ -1468,48 +1478,49 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const subscription = client.agent.subscribeSessionEvents(sid, {
       // The stream is live as soon as the response headers land, whether or
       // not the server also sends an explicit `connected` frame.
-      onOpen: () => settle("connected"),
+      onOpen: () => {
+        if (eventSourceRef.current !== subscription || sessionIdRef.current !== sid) return;
+        setBackgroundJobsConnected(true);
+        bumpBackgroundJobsRevision();
+        settle("connected");
+      },
       onConnected: (frame) => {
+        if (eventSourceRef.current !== subscription || sessionIdRef.current !== sid) return;
+        setBackgroundJobsConnected(true);
+        bumpBackgroundJobsRevision();
         settle("connected");
         eventCoalescer.push(frame as unknown as AgentEvent);
       },
       onEvent: (frame) => {
-        // message_update frames arrive at network rate (often 30-100+/s);
-        // the coalescer buffers the latest one and dispatches at display
-        // rate, flushing synchronously before any other event type.
+        if (eventSourceRef.current !== subscription || sessionIdRef.current !== sid) return;
         eventCoalescer.push(frame as unknown as AgentEvent);
       },
-      onDestroyed: (frame) => eventCoalescer.push(frame as unknown as AgentEvent),
+      onDestroyed: (frame) => {
+        if (eventSourceRef.current !== subscription || sessionIdRef.current !== sid) return;
+        setBackgroundJobsConnected(false);
+        eventCoalescer.push(frame as unknown as AgentEvent);
+      },
       onDown: ({ fatal }) => {
+        if (eventSourceRef.current !== subscription || sessionIdRef.current !== sid) return;
+        setBackgroundJobsConnected(false);
         if (!fatal) return;
-        // Fatal error (404/500/content-type mismatch): browser won't
-        // auto-reconnect. Settle the Promise and manually reconnect for
-        // already-running sessions. Keep the timer in a ref so unmount or a
-        // session switch cancels it — otherwise an orphaned stream respawns
-        // (and can 404-loop) after the hook is torn down.
         settle("closed");
-        if (eventSourceRef.current === subscription && agentRunningRef.current) {
-          eventSourceRef.current = null;
-          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+        eventSourceRef.current = null;
+        if (agentRunningRef.current) {
+          clearTimeout(reconnectTimerRef.current ?? undefined);
           reconnectTimerRef.current = setTimeout(() => {
             reconnectTimerRef.current = null;
-            if (agentRunningRef.current && sessionIdRef.current === sid) {
+            if (sessionIdRef.current === sid && hookAliveRef.current && agentRunningRef.current) {
               void connectEvents(sid);
-              // The reconnect restores the event stream, but host tools, URI
-              // schemes, and the subagent roster were registered on the old
-              // connection — re-register them so the agent keeps working.
               reconnectActionsRef.current?.(sid);
             }
           }, 1000);
         }
-        // Recoverable errors (CONNECTING): let the adapter auto-reconnect.
-        // The timeout above resolves only to let callers decide whether this
-        // connection must be ready before they continue.
       },
     });
     eventSourceRef.current = subscription;
     return promise;
-  }, [client, eventCoalescer]);
+  }, [client, eventCoalescer, bumpBackgroundJobsRevision]);
 
   const respondToExtensionUi = useCallback(async (
     request: ExtensionUiDialogRequest,
@@ -2181,6 +2192,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
+      case "background_jobs_reset":
+        setBackgroundJobUpdates({});
+        backgroundJobRevisionRef.current = {};
+        bumpBackgroundJobsRevision();
+        break;
+      case "background_jobs_changed":
+        bumpBackgroundJobsRevision();
+        break;
+      case "session_settled":
+        bumpBackgroundJobsRevision();
+        break;
       case "agent_start":
         interruptReplyPendingRef.current = false;
         agentRunningRef.current = true;
@@ -2412,9 +2434,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setAgentPhase({ kind: "waiting_model" });
         break;
       }
-      case "tool_execution_update": {
-        const update = parseBackgroundJobUpdate({ toolCallId: event.toolCallId, toolName: event.toolName, args: event.args, partialResult: event.partialResult });
-        if (update) setBackgroundJobUpdates((previous) => ({ ...previous, [update.id]: update }));
+      case "tool_execution_update":
+      case "tool_execution_end": {
+        const update = parseBackgroundJobUpdate({ toolCallId: event.toolCallId, toolName: event.toolName, args: event.args, partialResult: event.partialResult ?? (event as AgentEvent & { result?: unknown }).result });
+        if (update) {
+          const previous = backgroundJobRevisionRef.current[update.id];
+          if (!previous || previous.toolCallId !== update.toolCallId || previous.state !== update.state) {
+            backgroundJobRevisionRef.current[update.id] = { toolCallId: update.toolCallId, state: update.state };
+            bumpBackgroundJobsRevision();
+          }
+          setBackgroundJobUpdates((current) => ({ ...current, [update.id]: update }));
+        }
+        if (event.type === "tool_execution_end") {
+          const id = event.toolCallId as string;
+          if (event.toolName === "todo" && sessionIdRef.current) void reconcileAgentState(sessionIdRef.current);
+          setAgentPhase((prev) => {
+            if (prev?.kind !== "running_tools") return prev;
+            const tools = prev.tools.filter((tool) => tool.id !== id);
+            return tools.length === 0 ? { kind: "waiting_model" } : { kind: "running_tools", tools };
+          });
+        }
         break;
       }
       case "tool_execution_start": {
@@ -2423,19 +2462,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setAgentPhase((prev) => {
           const tools = prev?.kind === "running_tools" ? [...prev.tools] : [];
           if (!tools.some((t) => t.id === id)) tools.push({ id, name });
-          return { kind: "running_tools", tools };
-        });
-        break;
-      }
-      case "tool_execution_end": {
-        const id = event.toolCallId as string;
-        if (event.toolName === "todo" && sessionIdRef.current) {
-          void reconcileAgentState(sessionIdRef.current);
-        }
-        setAgentPhase((prev) => {
-          if (prev?.kind !== "running_tools") return prev;
-          const tools = prev.tools.filter((t) => t.id !== id);
-          if (tools.length === 0) return { kind: "waiting_model" };
           return { kind: "running_tools", tools };
         });
         break;
@@ -2604,7 +2630,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
     }
-  }, [addNotice, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync]);
+  }, [addNotice, bumpBackgroundJobsRevision, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]): Promise<boolean> => {
@@ -3409,13 +3435,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (session) {
       sessionIdRef.current = session.id;
       loadSession(session.id, true, true).then((agentState) => {
+        if (sessionIdRef.current === session.id && agentState?.webActive && !agentState.external) {
+          void connectEvents(session.id);
+        } else if (agentState?.external) {
+          void listBackgroundJobs(session.id).then(({ jobs }) => {
+            if (jobs.length && sessionIdRef.current === session.id && !eventSourceRef.current) void connectEvents(session.id);
+          }).catch(() => {});
+        }
         if (agentState?.running) {
           if (agentState.state?.isStreaming || agentState.state?.isPromptRunning) {
             agentRunningRef.current = true;
             setAgentRunning(true);
             setAgentPhase(agentState.state.isStreaming ? { kind: "waiting_model" } : { kind: "running_command" });
             dispatch({ type: "start" });
-            void connectEvents(session.id);
             // Register the host-tool + URI bridges so the agent can call
             // open_url/notify/open_file and resolve pi-web://clipboard.
             void registerHostTools(session.id);
@@ -3684,7 +3716,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   return {
     // State
-    data, loading, error, activeLeafId, messages, backgroundJobs, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
+    data, loading, error, activeLeafId, messages, backgroundJobs, backgroundJobsConnected, backgroundJobsRevision, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
     agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, capabilities, handleCapabilitiesChange, thinkingLevel, fastModeEnabled, fastModeActive, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,

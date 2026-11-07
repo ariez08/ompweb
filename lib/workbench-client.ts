@@ -23,3 +23,17 @@ export async function fetchSubagentTranscript(sessionId: string, subagentId: str
   const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}?fromByte=0`);
   return readJson<{ messages: AgentMessage[] }>(response);
 }
+
+export async function listBackgroundJobs(sessionId: string): Promise<{ jobs: Array<{ id: string; toolCallId: string; state: string }> }> {
+  const response = await fetch(`/api/agent/${encodeURIComponent(sessionId)}/jobs`, { cache: "no-store" });
+  return readJson(response);
+}
+
+export async function requestBackgroundJob(sessionId: string, jobId: string, toolCallId: string, action: "inspect" | "stop"): Promise<void> {
+  const response = await fetch(`/api/agent/${encodeURIComponent(sessionId)}/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jobId, toolCallId, action }),
+  });
+  await readJson(response);
+}

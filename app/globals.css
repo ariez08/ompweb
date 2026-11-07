@@ -691,13 +691,20 @@ body {
   scrollbar-color: color-mix(in srgb, var(--text-dim) 45%, transparent) transparent;
 }
 
-/* Desktop chat transcript: the ChatMinimap is the only scrollbar there.
+/* Chat transcript: the ChatMinimap is the only scrollbar on desktop.
    scrollbar-width:none covers Firefox; WebKit/WKWebView (Chrome + the desktop
    app) needs the pseudo-element rule or an 8px semi-transparent scrollbar
-   keeps overlapping the minimap rail. Mobile keeps the native scrollbar. */
+   keeps overlapping the minimap rail. Mobile keeps the native scrollbar.
+   overflow-anchor: none disables the browser's default scroll anchoring heuristics
+   which misfire and reset scrollTop to 0 when virtualized groups or collapsible
+   tool-call rows expand/resize. */
 .chat-scroll-view {
   scrollbar-width: none;
   scrollbar-color: transparent transparent;
+  overflow-anchor: none;
+}
+.chat-scroll-container {
+  overflow-anchor: none;
 }
 .chat-scroll-view::-webkit-scrollbar {
   display: none;
