@@ -28,6 +28,7 @@ import type { HostToolDefinition, HostUriSchemeDefinition, RpcAvailableSlashComm
 import { isRecord } from "@/lib/type-guards";
 import type { SessionCapabilities } from "@/lib/capabilities-types";
 import { setTabProfile } from "@/lib/client/tab-profile";
+import { parseBackgroundJobUpdate, projectBackgroundJobs, type BackgroundJobUpdate } from "@/lib/background-jobs";
 // Stable across renders and HMR: the default transport for every hook instance.
 const defaultHttpClient: OmpwebClient = createHttpSseClient();
 import {
@@ -639,6 +640,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [error, setError] = useState<string | null>(null);
   const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [backgroundJobUpdates, setBackgroundJobUpdates] = useState<Record<string, BackgroundJobUpdate>>({});
+  const backgroundJobs = useMemo(() => projectBackgroundJobs(messages, backgroundJobUpdates), [messages, backgroundJobUpdates]);
+  useEffect(() => { setBackgroundJobUpdates({}); }, [session?.id]);
   const [entryIds, setEntryIds] = useState<string[]>([]);
   const [showPreCompactionHistory, setShowPreCompactionHistory] = useState(false);
   const [streamState, dispatch] = useReducer(streamReducer, { isStreaming: false, streamingMessage: null });
@@ -2408,6 +2412,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setAgentPhase({ kind: "waiting_model" });
         break;
       }
+      case "tool_execution_update": {
+        const update = parseBackgroundJobUpdate({ toolCallId: event.toolCallId, toolName: event.toolName, args: event.args, partialResult: event.partialResult });
+        if (update) setBackgroundJobUpdates((previous) => ({ ...previous, [update.id]: update }));
+        break;
+      }
       case "tool_execution_start": {
         const id = event.toolCallId as string;
         const name = event.toolName as string;
@@ -3675,7 +3684,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   return {
     // State
-    data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
+    data, loading, error, activeLeafId, messages, backgroundJobs, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
     agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, capabilities, handleCapabilitiesChange, thinkingLevel, fastModeEnabled, fastModeActive, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
@@ -3690,7 +3699,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     sessionIdRef, messagesEndRef, scrollContainerRef,
     pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
-    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, handleFastModeChange, handleAutoRetryChange, handleInterruptModeChange, handleAutoCompactionChange, handleSteeringModeChange, handleFollowUpModeChange, handleCycleModel, handleCycleThinkingLevel, handleAbortRetry, handleInterruptAndReply,
+    handleSend, ensureNewSession, handleAbort, handleFork, handleNavigate, handleModelChange, handleFastModeChange, handleAutoRetryChange, handleInterruptModeChange, handleAutoCompactionChange, handleSteeringModeChange, handleFollowUpModeChange, handleCycleModel, handleCycleThinkingLevel, handleAbortRetry, handleInterruptAndReply,
     handleCompact, handleHandoff, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     removeQueuedMessage, promoteQueuedToSteer,
     handleBuiltinSlashCommand, togglePreCompactionHistory,

@@ -87,9 +87,28 @@ pub(crate) fn terminate_process_tree(child: &mut Child) {
     #[cfg(unix)]
     let mut command = { let mut c = Command::new("/bin/kill"); c.args(["-9", "--", &format!("-{}", child.id())]); c };
     #[cfg(windows)]
-    let mut command = { let mut c = Command::new("taskkill"); c.args(["/pid", &child.id().to_string(), "/T", "/F"]); hide_console_window(&mut c); c };
+    terminate_windows_process_tree(child.id());
+    #[cfg(unix)]
+    {
+        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        if let Ok(mut killer) = command.spawn() {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if killer.try_wait().ok().flatten().is_some() { break; }
+                if Instant::now() >= deadline { let _ = killer.kill(); let _ = killer.wait(); break; }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    let _ = child.kill();
+}
+
+#[cfg(windows)]
+pub(crate) fn terminate_windows_process_tree(pid: u32) {
+    let mut command = Command::new("taskkill");
+    command.args(["/pid", &pid.to_string(), "/T", "/F"]);
+    hide_console_window(&mut command);
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    // Keep the parent alive until taskkill has enumerated its descendants.
     if let Ok(mut killer) = command.spawn() {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -98,7 +117,6 @@ pub(crate) fn terminate_process_tree(child: &mut Child) {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-    let _ = child.kill();
 }
 
 /// 20 KiB merged-output cap (mirror of MAX_OUTPUT_BYTES in the route).

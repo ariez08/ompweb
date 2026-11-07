@@ -731,6 +731,13 @@ function stripToolResultDetails(message: AgentMessage): AgentMessage {
       const taskDetails = keepTaskToolResultDetails(details);
       if (taskDetails) Object.assign(kept, taskDetails);
     }
+    if ((message.toolName === "bash" || message.toolName === "eval") && isRecord(details.async)) {
+      const asyncJob = details.async;
+      if (typeof asyncJob.jobId === "string" && asyncJob.type === message.toolName &&
+          (asyncJob.state === "running" || asyncJob.state === "completed" || asyncJob.state === "failed" || asyncJob.state === "cancelled")) {
+        kept.async = { jobId: asyncJob.jobId.slice(0, 80), type: asyncJob.type, state: asyncJob.state };
+      }
+    }
     if (Object.keys(kept).length > 0) return { ...rest, details: kept };
   }
   return rest;

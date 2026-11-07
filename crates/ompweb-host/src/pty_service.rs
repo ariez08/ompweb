@@ -78,11 +78,7 @@ impl PtyService {
             // child keeps running as an invisible process leak. Drop the kept
             // writer too so the master sees EOF and the process group dies
             // even if the shell ignored SIGKILL's sibling signals.
-            handle.writer.lock().unwrap().take();
-            if let Some(mut child) = handle.child.lock().unwrap().take() {
-                let _ = child.kill();
-                drop(child);
-            }
+            handle.terminate();
         }
     }
 
@@ -230,12 +226,7 @@ impl PtyService {
     }
 
     pub fn kill(&self, id: &str) -> Result<(), IpcError> {
-        let handle = self.find(id)?;
-        let mut child = handle.child.lock().unwrap();
-        if let Some(mut child) = child.take() {
-            let _ = child.kill();
-            drop(child);
-        }
+        self.find(id)?.terminate();
         Ok(())
     }
 
@@ -270,6 +261,17 @@ impl PtyService {
 }
 
 impl PtyHandle {
+    fn terminate(&self) {
+        self.writer.lock().unwrap().take();
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            #[cfg(windows)]
+            if let Some(pid) = child.process_id() {
+                crate::command_service::terminate_windows_process_tree(pid);
+            }
+            let _ = child.kill();
+        }
+    }
+
     fn broadcast(&self, event: PtyEvent) {
         self.readers
             .lock()

@@ -5,10 +5,12 @@ import { ArrowLeft, Bot, CircleAlert, LoaderCircle } from "lucide-react";
 import type { AgentMessage, ToolResultMessage } from "@/lib/types";
 import type { SubagentInfo } from "@/hooks/useAgentSession";
 import { MessageView } from "@/components/MessageView";
+import { useI18n } from "@/lib/i18n";
 import { fetchSubagentTranscript } from "@/lib/workbench-client";
 import { sendAgentCommand } from "@/lib/agent-client";
 
 export function SubagentDetailPanel({ subagent, sessionId, onBack }: { subagent: SubagentInfo; sessionId: string | null; onBack: () => void }) {
+  const { t } = useI18n();
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +72,11 @@ export function SubagentDetailPanel({ subagent, sessionId, onBack }: { subagent:
     };
   }, [loadMessages, subagent.status]);
   return <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", background: "var(--bg)" }}>
-    <div style={{ display: "flex", alignItems: "center", gap: 7, minHeight: 34, padding: "0 9px", borderBottom: "1px solid var(--border)", background: "var(--bg-panel)" }}><button type="button" onClick={onBack} aria-label="返回任务管理" title="返回任务管理" style={{ display: "grid", placeItems: "center", width: 24, height: 24, border: 0, background: "transparent", color: "var(--text-muted)", cursor: "pointer" }}><ArrowLeft size={14} aria-hidden="true" /></button><Bot size={14} style={{ color: "var(--accent)" }} aria-hidden="true" /><strong style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--accent)" }}>{subagent.agent}</strong><span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-muted)", fontSize: 11 }}>{subagent.task ?? subagent.description ?? ""}</span></div>
+    <div style={{ display: "flex", alignItems: "center", gap: 7, minHeight: 34, padding: "0 9px", borderBottom: "1px solid var(--border)", background: "var(--bg-panel)" }}><button type="button" onClick={onBack} aria-label={t("agentsPanel.backToManager")} title={t("agentsPanel.backToManager")} style={{ display: "grid", placeItems: "center", width: 24, height: 24, border: 0, background: "transparent", color: "var(--text-muted)", cursor: "pointer" }}><ArrowLeft size={14} aria-hidden="true" /></button><Bot size={14} style={{ color: "var(--accent)" }} aria-hidden="true" /><strong style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--accent)" }}>{subagent.agent}</strong><span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-muted)", fontSize: 11 }}>{subagent.task ?? subagent.description ?? ""}</span></div>
     <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 10, display: "grid", alignContent: "start", gap: 8 }}>
-      {loading && <div role="status" style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-dim)", fontSize: 11 }}><LoaderCircle size={13} className="icon-spin" aria-hidden="true" />加载子代理消息…</div>}
+      {loading && <div role="status" style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-dim)", fontSize: 11 }}><LoaderCircle size={13} className="icon-spin" aria-hidden="true" />{t("agentsPanel.loadingMessages")}</div>}
       {error && <div role="alert" style={{ display: "flex", gap: 6, color: "var(--status-error)", fontSize: 11 }}><CircleAlert size={13} aria-hidden="true" />{error}</div>}
-      {!loading && !error && messages.length === 0 && <div style={{ color: "var(--text-dim)", fontSize: 11, textAlign: "center", padding: 20 }}>暂时没有可读取的消息。</div>}
+      {!loading && !error && messages.length === 0 && <div style={{ color: "var(--text-dim)", fontSize: 11, textAlign: "center", padding: 20 }}>{t("agentsPanel.noMessages")}</div>}
       {(() => {
         const toolResults = new Map<string, ToolResultMessage>();
         for (const message of messages) if (message.role === "toolResult" && typeof (message as ToolResultMessage).toolCallId === "string") toolResults.set((message as ToolResultMessage).toolCallId, message as ToolResultMessage);

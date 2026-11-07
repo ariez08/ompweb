@@ -22,6 +22,7 @@ import { TerminalTabs } from "./terminal/TerminalTabs";
 import { RightWorkbench, type WorkbenchView } from "./panels/RightWorkbench";
 import { PanelErrorBoundary } from "./panels/PanelErrorBoundary";
 import { AgentsPanel } from "./agents/AgentsPanel";
+import { JobsPanel } from "./panels/JobsPanel";
 import { FileExplorer } from "./FileExplorer";
 import { SubagentDetailPanel } from "./agents/SubagentDetailPanel";
 import { useTheme } from "@/hooks/useTheme";
@@ -39,6 +40,7 @@ import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo, GenerationSpeedInfo } from "@/lib/pi-types";
 import type { SubagentInfo } from "@/hooks/useAgentSession";
+import type { BackgroundJob } from "@/lib/background-jobs";
 import type { SettingsTab } from "./SettingsTabs";
 import type { Selection } from "./ModelsConfig";
 import { SettingsConfig } from "./SettingsConfig";
@@ -279,6 +281,7 @@ export function AppShell() {
   }, [rightPanelWidth, rightPanelResizing]);
   // Live subagent roster lifted from the active ChatWindow (session-scoped).
   const [subagents, setSubagents] = useState<SubagentInfo[] | null>(null);
+  const [backgroundJobs, setBackgroundJobs] = useState<{ jobs: BackgroundJob[]; error: string | null } | null>(null);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentInfo | null>(null);
   useEffect(() => {
     // A transcript belongs to one parent session. Never leave a detail view
@@ -823,6 +826,7 @@ export function AppShell() {
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [workbenchRequestedView, setWorkbenchRequestedView] = useState<{ view: WorkbenchView; nonce: number } | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalCount, setTerminalCount] = useState(0);
   const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
 
   // Quick-script "run in terminal" → open the bottom terminal drawer and queue
@@ -1621,14 +1625,17 @@ export function AppShell() {
             type="button"
             onClick={toggleTerminalPanel}
             title={terminalOpen ? t("appShell.hideTerminal") : t("appShell.toggleTerminal")}
-            aria-label={t("appShell.toggleTerminal")}
+            aria-label={terminalCount ? `${t("appShell.toggleTerminal")} (${terminalCount})` : t("appShell.toggleTerminal")}
             aria-pressed={terminalOpen}
             className="shell-toolbar-btn ui-focus-ring"
             style={{
+              width: terminalCount ? 40 : undefined,
+              gap: terminalCount ? 4 : undefined,
               color: terminalOpen ? "var(--accent)" : undefined,
               background: terminalOpen ? "var(--bg-selected)" : undefined,
             }}
           >
+            {terminalCount > 0 && <span aria-hidden="true" style={{ fontSize: 11, fontWeight: 600 }}>{terminalCount}</span>}
             <TerminalSquare size={16} strokeWidth={1.8} aria-hidden="true" />
           </button>
           <LanguageSwitcher />
@@ -2252,6 +2259,7 @@ export function AppShell() {
               thinkingDisplayMode={thinkingDisplayMode}
               onOpenPlan={() => selectedSession && handleOpenPlan(selectedSession.id)}
               onSubagentsChange={setSubagents}
+              onBackgroundJobsChange={setBackgroundJobs}
               onSessionLockChange={setSessionLockState}
             />
           ) : initialCwdStatus === "validating" ? (
@@ -2327,6 +2335,7 @@ export function AppShell() {
             onClose={() => setTerminalOpen(false)}
             cwd={terminalCwd ?? activeCwd ?? null}
             runCommand={terminalRunCommand}
+            onActiveCountChange={setTerminalCount}
             onRunCommandConsumed={() => setTerminalRunCommand(null)}
           />
         </div>
@@ -2407,6 +2416,11 @@ export function AppShell() {
             agents={(
               <PanelErrorBoundary title={t("rightPanel.agents") ?? "Agents"} unavailable={t("rightPanel.unavailable") ?? "is temporarily unavailable"} retryLabel={t("rightPanel.retry") ?? "Retry"}>
                 {selectedSubagent ? <SubagentDetailPanel subagent={selectedSubagent} sessionId={selectedSession?.id ?? null} onBack={() => setSelectedSubagent(null)} /> : subagents ? <AgentsPanel subagents={subagents} onSelectSubagent={(subagent) => { setSelectedSubagent(subagent); setWorkbenchRequestedView({ view: "agents", nonce: Date.now() }); setRightPanelOpen(true); }} /> : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12, textAlign: "center", padding: 24 }}>{t("appShell.noActiveSession") ?? "Open a session to see its agents."}</div>}
+              </PanelErrorBoundary>
+            )}
+            jobs={(
+              <PanelErrorBoundary title={t("rightWorkbench.jobs")} unavailable={t("rightPanel.unavailable")} retryLabel={t("rightPanel.retry")}>
+                <JobsPanel jobs={backgroundJobs?.jobs ?? null} sessionId={selectedSession?.id ?? null} error={backgroundJobs?.error ?? null} />
               </PanelErrorBoundary>
             )}
           />

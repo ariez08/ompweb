@@ -71,7 +71,7 @@ function baseNameOf(cwd: string | null): string {
  * tab's panel once. The host reports consumption via onRunCommandConsumed so
  * the parent can drop the command: a remount must not re-run it.
  */
-export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsumed, embedded = false }: {
+export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsumed, onActiveCountChange, embedded = false }: {
   open: boolean;
   onClose: () => void;
   /** Default cwd for a newly created tab (project/active session). */
@@ -80,6 +80,7 @@ export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsu
   runCommand?: { text: string; nonce: number } | null;
   /** Parent notification that the queued command was consumed (drop it). */
   onRunCommandConsumed?: () => void;
+  onActiveCountChange?: (count: number) => void;
   /** Fill the parent workbench pane instead of owning a bottom-drawer height. */
   embedded?: boolean;
 }) {
@@ -119,6 +120,30 @@ export function TerminalTabs({ open, onClose, cwd, runCommand, onRunCommandConsu
    *  silently killing whatever the user started in it. */
   const [ptyByTab, setPtyByTab] = useState<Record<string, string>>({});
   const [pendingClose, setPendingClose] = useState<{ id: string; label: string } | null>(null);
+  useEffect(() => {
+    onActiveCountChange?.(Object.keys(ptyByTab).length);
+  }, [onActiveCountChange, ptyByTab]);
+  useEffect(() => {
+    if (Object.keys(ptyByTab).length === 0) return;
+    const confirmLeave = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const closeSessions = () => {
+      for (const id of Object.values(ptyByTab)) {
+        void fetch(`/api/terminal/session?id=${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener("beforeunload", confirmLeave);
+    window.addEventListener("pagehide", closeSessions);
+    return () => {
+      window.removeEventListener("beforeunload", confirmLeave);
+      window.removeEventListener("pagehide", closeSessions);
+    };
+  }, [ptyByTab]);
 
   const openTab = useCallback((targetCwd: string | null, forceNew = false, activate = true): string => {
     // Reuse an existing tab with the same cwd when present (quick-script

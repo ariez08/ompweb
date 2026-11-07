@@ -15,30 +15,30 @@ export function EmptyChatHero({ onSelectPrompt, cwd }: Props) {
   const promptCards = [
     {
       icon: Compass,
-      title: t("emptyState.cardPlanTitle") || "智能工程规划",
-      desc: t("emptyState.cardPlanDesc") || "分析当前项目结构，自动分解任务并生成实施路线",
-      prompt: "/plan 分析当前项目的架构与核心模块，并制定下一步计划",
+      title: t("emptyState.cardPlanTitle"),
+      desc: t("emptyState.cardPlanDesc"),
+      prompt: t("emptyState.promptPlan"),
       accent: "var(--accent)",
     },
     {
       icon: ShieldCheck,
-      title: t("emptyState.cardReviewTitle") || "代码质量审查",
-      desc: t("emptyState.cardReviewDesc") || "多维度审查最近的代码改动、类型安全与潜在隐患",
-      prompt: "/review 审查最近的代码改动，排查逻辑缺陷与规范问题",
+      title: t("emptyState.cardReviewTitle"),
+      desc: t("emptyState.cardReviewDesc"),
+      prompt: t("emptyState.promptReview"),
       accent: "#38BDF8",
     },
     {
       icon: TerminalSquare,
-      title: t("emptyState.cardTestTitle") || "运行测试与验证",
-      desc: t("emptyState.cardTestDesc") || "执行项目测试套件，自动捕获错误并提供修复方案",
-      prompt: "/test 运行测试套件并验证系统功能完整性",
+      title: t("emptyState.cardTestTitle"),
+      desc: t("emptyState.cardTestDesc"),
+      prompt: t("emptyState.promptTest"),
       accent: "#4ADE80",
     },
     {
       icon: FileCode2,
-      title: t("emptyState.cardExploreTitle") || "工作区检索与答疑",
-      desc: t("emptyState.cardExploreDesc") || "向 omp 提问，输入 @ 快速引用文件或函数进行研讨",
-      prompt: "简要介绍当前工作区的主要功能与目录结构",
+      title: t("emptyState.cardExploreTitle"),
+      desc: t("emptyState.cardExploreDesc"),
+      prompt: t("emptyState.promptExplore"),
       accent: "#FBBF24",
     },
   ];
@@ -204,15 +204,15 @@ export function EmptyChatHero({ onSelectPrompt, cwd }: Props) {
         }}
       >
         <span>
-          输入 <kbd style={{ padding: "1px 5px", borderRadius: 4, background: "var(--bg-hover)", border: "1px solid var(--border)" }}>/</kbd> 指令
+          {t("emptyState.hintSlashBefore")} <kbd style={{ padding: "1px 5px", borderRadius: 4, background: "var(--bg-hover)", border: "1px solid var(--border)" }}>/</kbd> {t("emptyState.hintSlashAfter")}
         </span>
         <span>·</span>
         <span>
-          使用 <kbd style={{ padding: "1px 5px", borderRadius: 4, background: "var(--bg-hover)", border: "1px solid var(--border)" }}>@</kbd> 引用文件
+          {t("emptyState.hintAtBefore")} <kbd style={{ padding: "1px 5px", borderRadius: 4, background: "var(--bg-hover)", border: "1px solid var(--border)" }}>@</kbd> {t("emptyState.hintAtAfter")}
         </span>
         <span>·</span>
         <span>
-          <kbd style={{ padding: "1px 5px", borderRadius: 4, background: "var(--bg-hover)", border: "1px solid var(--border)" }}>{isMacPlatform() ? "⌘K" : "Ctrl K"}</kbd> 命令面板
+          <kbd style={{ padding: "1px 5px", borderRadius: 4, background: "var(--bg-hover)", border: "1px solid var(--border)" }}>{isMacPlatform() ? "⌘K" : "Ctrl K"}</kbd> {t("emptyState.hintPalette")}
         </span>
       </div>
     </div>

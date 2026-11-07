@@ -13,6 +13,7 @@ import { ComposerPanels } from "./ComposerPanels";
 import { CHAT_COLUMN_GUTTER, CHAT_COLUMN_MAX_WIDTH, CHAT_MINIMAP_RAIL_GUTTER } from "@/lib/chat-layout";
 import { EmptyChatHero } from "./EmptyChatHero";
 import { useAgentSession, type AgentPhase, type NoticeItem, type SubagentInfo } from "@/hooks/useAgentSession";
+import type { BackgroundJob } from "@/lib/background-jobs";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -56,6 +57,7 @@ interface Props {
    *  Called with the latest roster array reference on every change and with
    *  null when this session view unmounts (session switch). */
   onSubagentsChange?: (roster: SubagentInfo[] | null) => void;
+  onBackgroundJobsChange?: (value: { jobs: BackgroundJob[]; error: string | null } | null) => void;
   onSessionLockChange?: (info: { kind: "cli" | "web" | "idle"; pid?: number | null }) => void;
 }
 
@@ -491,7 +493,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
     </>
   );
 });
-export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onModelCapacityChange, onGenerationSpeedChange, onOpenFile, onOpenPlan, onSubagentsChange, onSessionLockChange }: Props) {
+export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onModelCapacityChange, onGenerationSpeedChange, onOpenFile, onOpenPlan, onSubagentsChange, onBackgroundJobsChange, onSessionLockChange }: Props) {
   const { t, tn } = useI18n();
   const isMobile = useIsMobile();
   // The minimap sits over the transcript's right edge on desktop. Reserve its
@@ -520,7 +522,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
   }, [chatInputRef]);
 
   const {
-    loading, error, messages, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
+    loading, error, messages, backgroundJobs, entryIds, showPreCompactionHistory, streamState, cliLockPid, sessionLockKind,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, capabilities, handleCapabilitiesChange, thinkingLevel, fastModeEnabled, fastModeActive,
     liveModelMeta,
     retryInfo, contextUsage, forkingEntryId,
@@ -532,7 +534,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
     subagents, subagentEvents, subagentTranscriptVersions, activeSubagentCount, currentTodoPhase, todoPhases,
     isNew,
     sessionIdRef, messagesEndRef, scrollContainerRef,
-    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
+    handleSend, ensureNewSession, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction, handleCompact,
     removeQueuedMessage, promoteQueuedToSteer,
     handleBuiltinSlashCommand, togglePreCompactionHistory,
@@ -944,6 +946,10 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
     onSubagentsChange?.(subagentsRef.current);
   }, [subagents, onSubagentsChange]);
   useEffect(() => () => { onSubagentsChange?.(null); }, [onSubagentsChange]);
+  useEffect(() => {
+    onBackgroundJobsChange?.(loading ? null : { jobs: backgroundJobs, error });
+  }, [backgroundJobs, error, loading, onBackgroundJobsChange]);
+  useEffect(() => () => { onBackgroundJobsChange?.(null); }, [onBackgroundJobsChange]);
 
   // Push context usage up to AppShell as well.
   const ctxKey = contextUsage
@@ -1104,6 +1110,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
       capabilities={capabilities}
       onCapabilitiesChange={handleCapabilitiesChange}
       sessionId={session?.id}
+      onEnsureSession={ensureNewSession}
       activeGoal={activeGoal}
       activePlan={activePlan ?? (planInfo?.planModeActive ? { objective: t("chatWindow.planDocument") } : null)}
       onOpenPlan={onOpenPlan}
