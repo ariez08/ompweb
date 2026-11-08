@@ -583,6 +583,7 @@ function buildOutgoingPrompt(
 
 export interface ChatInputHandle {
   insertText: (text: string) => void;
+  addMention: (text: string) => void;
   insertIfEmpty: (content: string) => void;
   prependText: (text: string) => void;
   addFiles: (files: File[]) => void;

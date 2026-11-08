@@ -1935,11 +1935,11 @@ export function AppShell() {
               // preview on narrow windows.
               right: `calc(${rightPanelInset} + 12px)`,
               left: "auto",
-              minWidth: activeTopPanel === "github" || isMobile ? 0 : 360,
-              width: activeTopPanel === "github" ? "min(320px, calc(100vw - 24px))" : "auto",
-              maxWidth: activeTopPanel === "github" ? "min(320px, calc(100vw - 24px))" : "min(680px, calc(100vw - 24px))",
+              minWidth: activeTopPanel === "github" || activeTopPanel === "session" || isMobile ? 0 : 360,
+              width: activeTopPanel === "session" ? `min(680px, calc(100vw - ${rightPanelInset} - 24px))` : activeTopPanel === "github" ? "min(320px, calc(100vw - 24px))" : "auto",
+              maxWidth: activeTopPanel === "session" ? `min(680px, calc(100vw - ${rightPanelInset} - 24px))` : activeTopPanel === "github" ? "min(320px, calc(100vw - 24px))" : "min(680px, calc(100vw - 24px))",
               maxHeight: `min(70vh, calc(100dvh - ${topPanelPos.top}px - 12px))`,
-              overflow: "hidden",
+              overflowY: activeTopPanel === "session" ? "auto" : "hidden",
               overflowX: "hidden",
               zIndex: 500,
               }}
@@ -2116,7 +2116,7 @@ export function AppShell() {
                           display: "grid",
                           gridTemplateColumns: isMobile
                             ? "1fr"
-                            : "minmax(240px, 1.6fr) minmax(110px, 0.55fr) minmax(140px, 0.65fr)",
+                            : "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
                           gap: isMobile ? 16 : 24,
                           fontSize: 12,
                           lineHeight: 1.5,

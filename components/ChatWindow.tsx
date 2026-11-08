@@ -189,6 +189,7 @@ interface CommittedTranscriptProps {
   handleFork: (entryId: string) => void;
   handleNavigate: (entryId: string) => void;
   handleEditContent: (content: string) => void;
+  handleMentionSelectedText: (text: string) => void;
   modelNames: Record<string, string>;
   messageCwd: string | undefined;
   onOpenFile?: (filePath: string) => void;
@@ -213,7 +214,7 @@ interface CommittedTranscriptProps {
  */
 const CommittedTranscript = memo(function CommittedTranscript({
   messages, entryIds, conversationMeta, messageRefs, isStreaming, sessionBusy, isNew, forkingEntryId,
-  handleFork, handleNavigate, handleEditContent, modelNames, messageCwd, onOpenFile, sessionId,
+  handleFork, handleNavigate, handleEditContent, handleMentionSelectedText, modelNames, messageCwd, onOpenFile, sessionId,
   toolCallsDefaultCollapsed, thinkingDisplayMode, groups, layout, window: win, onLayoutChanged,
 }: CommittedTranscriptProps) {
   const { toolResultsMap, lastAnchorIdx, visibleRefIndexByMessage } = conversationMeta;
@@ -259,6 +260,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
         onNavigate={sessionBusy ? undefined : handleNavigate}
         prevAssistantEntryId={sessionBusy ? undefined : prevAssistantEntryId}
         onEditContent={handleEditContent}
+        onMentionSelectedText={handleMentionSelectedText}
         showTimestamp={showTimestamp}
         prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
         sessionId={sessionId}
@@ -520,6 +522,10 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
   // 稳定化 onEditContent 引用，配合 React.memo 防止历史消息重渲染
   const handleEditContent = useCallback((content: string) => {
     chatInputRef?.current?.insertIfEmpty(content);
+  }, [chatInputRef]);
+
+  const handleMentionSelectedText = useCallback((text: string) => {
+    chatInputRef?.current?.addMention(text);
   }, [chatInputRef]);
 
   const {
@@ -1323,6 +1329,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
               handleFork={handleFork}
               handleNavigate={handleNavigate}
               handleEditContent={handleEditContent}
+              handleMentionSelectedText={handleMentionSelectedText}
               modelNames={modelNames}
               messageCwd={messageCwd}
               onOpenFile={onOpenFile}
@@ -1344,6 +1351,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
                 toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
                 thinkingDisplayMode={thinkingDisplayMode}
                 liveTokensPerSecond={tokensPerSecond}
+                onMentionSelectedText={handleMentionSelectedText}
               />
             )}
 

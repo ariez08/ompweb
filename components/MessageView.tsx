@@ -1,7 +1,8 @@
 "use client";
 
-import { memo, useState, useRef, useEffect, useMemo, useCallback, type ComponentProps } from "react";
-import { Copy, Check, GitFork, CornerUpLeft, ChevronRight, ChevronDown, Brain, EyeOff, CircleAlert, LoaderCircle } from "lucide-react";
+import { memo, useState, useRef, useEffect, useMemo, useCallback, type ComponentProps, type ReactNode, type SyntheticEvent } from "react";
+import { Copy, Check, GitFork, CornerUpLeft, ChevronRight, ChevronDown, Brain, EyeOff, CircleAlert, LoaderCircle, AtSign } from "lucide-react";
+import { createPortal } from "react-dom";
 import { MarkdownBody } from "./MarkdownBody";
 import { ClickableImage } from "./ImageLightbox";
 import { translate, useI18n, type Locale } from "@/lib/i18n";
@@ -118,6 +119,8 @@ interface Props {
   thinkingDisplayMode?: "auto" | "collapsed" | "expanded";
   /** omp-reported output throughput (get_state.tokensPerSecond), live while streaming. */
   liveTokensPerSecond?: number | null;
+  /** Insert selected assistant text into the composer as a quoted mention. */
+  onMentionSelectedText?: (text: string) => void;
 }
 
 function formatTime(ts: number | undefined, locale: Locale): string | null {
@@ -154,12 +157,12 @@ function isAssistantErrorMessage(message: AssistantMessage): boolean {
     || message.errorCode !== undefined;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", liveTokensPerSecond }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", liveTokensPerSecond, onMentionSelectedText }: Props) {
   if (message.role === "user") {
     return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} thinkingDisplayMode={thinkingDisplayMode} liveTokensPerSecond={liveTokensPerSecond} />;
+    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} thinkingDisplayMode={thinkingDisplayMode} liveTokensPerSecond={liveTokensPerSecond} onMentionSelectedText={onMentionSelectedText} />;
   }
   if (message.role === "toolResult") {
     // Rendered inline under its toolCall — skip standalone rendering if paired
@@ -200,7 +203,8 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.sessionId === next.sessionId
     && prev.toolCallsDefaultCollapsed === next.toolCallsDefaultCollapsed
     && prev.thinkingDisplayMode === next.thinkingDisplayMode
-    && prev.liveTokensPerSecond === next.liveTokensPerSecond;
+    && prev.liveTokensPerSecond === next.liveTokensPerSecond
+    && prev.onMentionSelectedText === next.onMentionSelectedText;
 });
 
 function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent }: {  message: UserMessage;
@@ -410,6 +414,7 @@ function AssistantMessageView({
   toolCallsDefaultCollapsed,
   thinkingDisplayMode = "auto",
   liveTokensPerSecond,
+  onMentionSelectedText,
 }: {
   message: AssistantMessage;
   isStreaming?: boolean;
@@ -424,6 +429,7 @@ function AssistantMessageView({
   toolCallsDefaultCollapsed: boolean;
   thinkingDisplayMode?: "auto" | "collapsed" | "expanded";
   liveTokensPerSecond?: number | null;
+  onMentionSelectedText?: (text: string) => void;
 }) {
   const { t, locale } = useI18n();
   const time = showTimestamp ? formatTime(message.timestamp, locale) : null;
@@ -614,7 +620,7 @@ function AssistantMessageView({
             otherwise ThinkingBlock remounts on commit and loses the expanded
             state (the "thinking flash" bug). */}
         {blockItems.map(({ block, originalIndex }) => (
-          <BlockView key={`${originalIndex}`} block={block} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} sessionId={sessionId} entryId={entryId} blockIndex={originalIndex} isLatestBlock={originalIndex === latestBlockIndex} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} thinkingDisplayMode={thinkingDisplayMode} />
+          <BlockView key={`${originalIndex}`} block={block} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} sessionId={sessionId} entryId={entryId} blockIndex={originalIndex} isLatestBlock={originalIndex === latestBlockIndex} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} thinkingDisplayMode={thinkingDisplayMode} onMentionSelectedText={isStreaming ? undefined : onMentionSelectedText} />
         ))}
       </div>
 
@@ -627,9 +633,9 @@ function AssistantMessageView({
   );
 }
 
-function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, sessionId, entryId, blockIndex, isLatestBlock, toolCallsDefaultCollapsed, thinkingDisplayMode }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string) => void; sessionId?: string; entryId?: string; blockIndex: number; isLatestBlock?: boolean; toolCallsDefaultCollapsed: boolean; thinkingDisplayMode?: "auto" | "collapsed" | "expanded" }) {
+function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, sessionId, entryId, blockIndex, isLatestBlock, toolCallsDefaultCollapsed, thinkingDisplayMode, onMentionSelectedText }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string) => void; sessionId?: string; entryId?: string; blockIndex: number; isLatestBlock?: boolean; toolCallsDefaultCollapsed: boolean; thinkingDisplayMode?: "auto" | "collapsed" | "expanded"; onMentionSelectedText?: (text: string) => void }) {
   if (block.type === "text") {
-    return <TextBlock block={block as TextContent} isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile} />;
+    return <TextBlock block={block as TextContent} isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile} onMentionSelectedText={onMentionSelectedText} />;
   }
   if (block.type === "thinking") {
     return <ThinkingBlock block={block as ThinkingContent} duration={streamingDuration} sessionId={sessionId} entryId={entryId} blockIndex={blockIndex} isStreaming={isStreaming} isLatestBlock={isLatestBlock} thinkingDisplayMode={thinkingDisplayMode} />;
@@ -648,13 +654,161 @@ function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCal
 // instead of object identity: finished blocks of the streaming message then
 // skip their ReactMarkdown re-parse and only the actively growing block
 // re-renders per frame.
-const TextBlock = memo(function TextBlock({ block, isStreaming, cwd, onOpenFile }: { block: TextContent; isStreaming?: boolean; cwd?: string; onOpenFile?: (filePath: string) => void }) {
-  return <SafeMarkdownBody isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile}>{block.text}</SafeMarkdownBody>;
+type MentionSelection = {
+  text: string;
+  top: number;
+  left: number;
+};
+
+function MentionableAssistantText({
+  children,
+  onMention,
+}: {
+  children: ReactNode;
+  onMention?: (text: string) => void;
+}) {
+  const { t } = useI18n();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [selection, setSelection] = useState<MentionSelection | null>(null);
+
+  const readSelection = useCallback(() => {
+    if (!onMention) return;
+    const root = rootRef.current;
+    const selected = window.getSelection();
+    if (!root || !selected || selected.isCollapsed || selected.rangeCount === 0) {
+      setSelection(null);
+      return;
+    }
+    if (!selected.anchorNode || !selected.focusNode
+      || !root.contains(selected.anchorNode) || !root.contains(selected.focusNode)) {
+      setSelection(null);
+      return;
+    }
+    const text = selected.toString().trim();
+    if (!text) {
+      setSelection(null);
+      return;
+    }
+    const rect = selected.getRangeAt(0).getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      setSelection(null);
+      return;
+    }
+    const left = Math.max(58, Math.min(window.innerWidth - 58, rect.left + rect.width / 2));
+    const top = rect.top >= 46 ? rect.top - 38 : rect.bottom + 8;
+    setSelection({ text, top, left });
+  }, [onMention]);
+
+  const scheduleSelectionRead = useCallback((event?: SyntheticEvent) => {
+    const root = rootRef.current;
+    if (event?.target instanceof Node && root && !root.contains(event.target)) return;
+    window.requestAnimationFrame(readSelection);
+  }, [readSelection]);
+
+  useEffect(() => {
+    if (!selection) return;
+    let frame: number | null = null;
+    const schedule = () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(readSelection);
+    };
+    const dismiss = () => setSelection(null);
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (rootRef.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      dismiss();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismiss();
+    };
+    document.addEventListener("selectionchange", schedule);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("resize", dismiss);
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      document.removeEventListener("selectionchange", schedule);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("resize", dismiss);
+    };
+  }, [readSelection, selection]);
+
+  const handleMention = useCallback(() => {
+    if (!selection || !onMention) return;
+    onMention(selection.text);
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+  }, [onMention, selection]);
+
+  return (
+    <div ref={rootRef} onPointerUp={scheduleSelectionRead} onKeyUp={scheduleSelectionRead}>
+      {children}
+      {selection && typeof document !== "undefined" && createPortal(
+        <div
+          ref={popoverRef}
+          role="toolbar"
+          aria-label={t("messageView.selectionActions")}
+          style={{
+            position: "fixed",
+            top: selection.top,
+            left: selection.left,
+            zIndex: 2100,
+            transform: "translateX(-50%)",
+            padding: 3,
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-control)",
+            background: "var(--bg-panel)",
+            boxShadow: "var(--shadow-pop)",
+          }}
+        >
+          <button
+            type="button"
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={handleMention}
+            aria-label={t("messageView.mentionSelectedText")}
+            title={t("messageView.mentionSelectedText")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              minHeight: 28,
+              padding: "4px 8px",
+              border: "none",
+              borderRadius: 6,
+              background: "transparent",
+              color: "var(--text)",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+            onMouseEnter={(event) => { event.currentTarget.style.background = "var(--bg-hover)"; }}
+            onMouseLeave={(event) => { event.currentTarget.style.background = "transparent"; }}
+          >
+            <AtSign size={13} strokeWidth={2.2} aria-hidden="true" />
+            {t("messageView.mention")}
+          </button>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+const TextBlock = memo(function TextBlock({ block, isStreaming, cwd, onOpenFile, onMentionSelectedText }: { block: TextContent; isStreaming?: boolean; cwd?: string; onOpenFile?: (filePath: string) => void; onMentionSelectedText?: (text: string) => void }) {
+  const body = <SafeMarkdownBody isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile}>{block.text}</SafeMarkdownBody>;
+  if (!onMentionSelectedText) return body;
+  return <MentionableAssistantText onMention={onMentionSelectedText}>{body}</MentionableAssistantText>;
 }, (prev, next) => (
   prev.block.text === next.block.text
   && prev.isStreaming === next.isStreaming
   && prev.cwd === next.cwd
   && prev.onOpenFile === next.onOpenFile
+  && prev.onMentionSelectedText === next.onMentionSelectedText
 ));
 
 const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex, isStreaming, isLatestBlock = false, thinkingDisplayMode = "auto" }: {

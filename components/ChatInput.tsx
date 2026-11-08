@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, memo, KeyboardEvent } from "react";
-import { ChevronDown, ListChecks, Search, Shrink, SlidersHorizontal, Sparkles, Target, Zap } from "lucide-react";
+import { ChevronDown, ListChecks, Quote, Search, Shrink, SlidersHorizontal, Sparkles, Target, X, Zap } from "lucide-react";
 import { getSubmitDuringRunBehavior } from "@/lib/composer-prefs";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
 import type { ActiveGoal, ActivePlan } from "@/lib/web-mode-state";
@@ -9,6 +9,7 @@ import { formatGoalElapsed } from "@/lib/web-mode-state";
 import { toast } from "@/components/ui/toast";
 import { formatCompactNumber } from "@/lib/format";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
+import { addMentionText, buildMentionPrompt, mentionPreview, mentionTooltip } from "@/lib/composer-mentions";
 import { WEB_SLASH_COMMANDS, expandWebSlashCommand, extractSlashQuery, type SlashQueryMatch } from "@/lib/web-slash-commands";
 import { CHAT_COLUMN_GUTTER, CHAT_COLUMN_MAX_WIDTH, CHAT_MINIMAP_RAIL_GUTTER } from "@/lib/chat-layout";
 import {
@@ -107,6 +108,8 @@ interface Props {
 
 export interface ChatInputHandle {
   insertText: (text: string) => void;
+  /** Attach a quoted assistant-message snippet as a removable chip. */
+  addMention: (text: string) => void;
   insertIfEmpty: (text: string) => void;
   prependText: (text: string) => void;
   addFiles: (files: File[]) => void;
@@ -437,9 +440,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     draftKey ? draftImagesToAttachedImages(getDraft(draftKey)?.images) : []
   ));
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [mentions, setMentions] = useState<string[]>(() => (
+    draftKey ? getDraft(draftKey)?.mentions ?? [] : []
+  ));
   const [attachError, setAttachError] = useState<string | null>(null);
   const trimmedValue = value.trimStart();
-  const bashMode = attachedImages.length === 0 && attachedFiles.length === 0 && trimmedValue.startsWith("!");
+  const bashMode = attachedImages.length === 0 && attachedFiles.length === 0 && mentions.length === 0 && trimmedValue.startsWith("!");
   const bashExcluded = bashMode && trimmedValue.startsWith("!!");
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
@@ -470,6 +476,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const draftKeyRef = useRef(draftKey);
   const valueRef = useRef(value);
   const attachedImagesRef = useRef(attachedImages);
+  const mentionsRef = useRef(mentions);
   // Bumped whenever the user clears/sends the composer: in-flight FileReader
   // reads must not re-append their results afterwards.
   const attachmentRevisionRef = useRef(0);
@@ -478,6 +485,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const lastMeasuredValueRef = useRef(value);
   valueRef.current = value;
   attachedImagesRef.current = attachedImages;
+  mentionsRef.current = mentions;
 
   useImperativeHandle(ref, () => ({
     insertIfEmpty(text: string) {
@@ -535,6 +543,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         ta.style.height = "auto";
         ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
       });
+    },
+    addMention(text: string) {
+      setMentions((prev) => addMentionText(prev, text));
+      setAttachError(null);
+      requestAnimationFrame(() => textareaRef.current?.focus());
     },
     addFiles(files: File[]) {
       processFiles(files);
@@ -677,6 +690,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     setAttachError(null);
   }, []);
 
+  const removeMention = useCallback((index: number) => {
+    setMentions((prev) => prev.filter((_, i) => i !== index));
+    setAttachError(null);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
+
   const clearImages = useCallback(() => {
     setAttachedImages((prev) => {
       prev.forEach(revokeImagePreview);
@@ -689,6 +708,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     setAtQuery(null);
     setSlashMatch(null);
     setHistoryMenuOpen(false);
+    setMentions([]);
     if (draftKey) clearDraft(draftKey);
     if (draftKeyRef.current && draftKeyRef.current !== draftKey) clearDraft(draftKeyRef.current);
     clearImages();
@@ -704,8 +724,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     setDraft(draftKey, {
       value,
       images: attachedImages.map(imageToDraftImage),
+      mentions,
     });
-  }, [attachedImages, draftKey, value]);
+  }, [attachedImages, draftKey, mentions, value]);
 
   useEffect(() => {
     const previousDraftKey = draftKeyRef.current;
@@ -715,6 +736,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       setDraft(previousDraftKey, {
         value: valueRef.current,
         images: attachedImagesRef.current.map(imageToDraftImage),
+        mentions: mentionsRef.current,
       });
     }
 
@@ -722,6 +744,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     draftKeyRef.current = draftKey;
     uploadedFilesRef.current.clear();
     setValue(draft?.value ?? "");
+    setMentions(draft?.mentions ?? []);
     setAtQuery(null);
     setSlashMatch(null);
     setHistoryMenuOpen(false);
@@ -750,7 +773,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSend = useCallback(async () => {
-    const msg = value.trim();
+    // Quoted snippets are prepended as blockquotes; with none this is just the
+    // typed text, so slash/shell handling below is unchanged.
+    const msg = buildMentionPrompt(value.trim(), mentions);
     if (!msg && !attachedImages.length && !attachedFiles.length) return;
     if (isStreaming || isSubmitting) return;
     onAudioUnlock?.();
@@ -827,7 +852,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     }
     onSend(msg, attachedImages.length ? attachedImages : undefined);
     clearInput();
-  }, [value, attachedImages, attachedFiles, isStreaming, isSubmitting, sessionId, onEnsureSession, onBuiltinCommand, onSend, clearInput, onAudioUnlock, t]);
+  }, [value, mentions, attachedImages, attachedFiles, isStreaming, isSubmitting, sessionId, onEnsureSession, onBuiltinCommand, onSend, clearInput, onAudioUnlock, t]);
 
   // Slash token follows the caret, not the input start: typing a slash after
   // real text must still open the palette (see extractSlashQuery).
@@ -1113,7 +1138,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   }, [slashMatch, value]);
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
-    const msg = value.trim();
+    const msg = buildMentionPrompt(value.trim(), mentions);
     if (!msg && !attachedImages.length && !attachedFiles.length) return;
     if (attachedImages.length || attachedFiles.length) return;
     onAudioUnlock?.();
@@ -1171,7 +1196,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     }
     setAttachError(null);
     clearInput();
-  }, [value, attachedImages, attachedFiles, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled]);
+  }, [value, mentions, attachedImages, attachedFiles, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled]);
 
   // ── Dictation ───────────────────────────────────────────────────────────
   // The transcript arrives from a server job, so a send/queue chosen before a
@@ -1200,8 +1225,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     onTranscript: (text, after) => {
       const base = valueRef.current;
       const sep = base.length > 0 && !base.endsWith(" ") ? " " : "";
-      const finalText = base + sep + text;
-      setValue(finalText);
+      const typedText = base + sep + text;
+      setValue(typedText);
+      // Dictation auto-send must carry the attached quotes too: clearInput()
+      // below would otherwise discard them silently.
+      const finalText = buildMentionPrompt(typedText, mentionsRef.current);
       setAtQuery(null);
       setSlashMatch(null);
       if (!after) {
@@ -1742,6 +1770,54 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             borderRadius: 6, fontSize: 12, color: "var(--status-error)",
           }}>
             {attachError}
+          </div>
+        )}
+        {mentions.length > 0 && (
+          <div role="list" aria-label={t("chatInput.mentionsLabel")} style={{ display: "flex", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+            {mentions.map((text, i) => (
+              <div
+                key={`${i}:${text.slice(0, 32)}`}
+                role="listitem"
+                title={mentionTooltip(text)}
+                style={{
+                  position: "relative",
+                  flex: "0 1 280px",
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  padding: "6px 12px 7px 10px",
+                  border: "1px solid var(--border)",
+                  borderLeft: "3px solid var(--accent)",
+                  borderRadius: 6,
+                  background: "var(--bg-subtle)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2, color: "var(--text-dim)", fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                  <Quote size={10} strokeWidth={2.2} aria-hidden="true" style={{ flexShrink: 0, color: "var(--accent)" }} />
+                  <span>{t("chatInput.mentionLabel")}</span>
+                </div>
+                <div style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden", overflowWrap: "anywhere", color: "var(--text)", fontSize: 12, lineHeight: 1.45 }}>
+                  {mentionPreview(text)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeMention(i)}
+                  title={t("chatInput.removeMention")}
+                  aria-label={t("chatInput.removeMention")}
+                  style={{
+                    position: "absolute", top: -5, right: -5,
+                    width: 24, height: 24, borderRadius: "50%",
+                    background: "var(--bg-panel)", border: "1px solid var(--border)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer", padding: 0, color: "var(--text-muted)",
+                    transition: "color var(--dur-fast) var(--ease-out-warm), background var(--dur-fast) var(--ease-out-warm)",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "var(--bg-panel)"; }}
+                >
+                  <X size={10} strokeWidth={2} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
         {attachedFiles.length > 0 && (
@@ -2953,7 +3029,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             {/* Primary action: Send (idle) / Steer + Queue + Stop (running) */}
             {isStreaming ? (
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                {Boolean(value.trim() || attachedImages.length) && (
+                {Boolean(value.trim() || attachedImages.length || mentions.length) && (
                   <>
                     <button
                       type="button"
@@ -3038,19 +3114,19 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={Boolean(cliLockPid) || (!value.trim() && !attachedImages.length && !attachedFiles.length) || isSubmitting}
+                disabled={Boolean(cliLockPid) || (!value.trim() && !attachedImages.length && !attachedFiles.length && !mentions.length) || isSubmitting}
                 title={cliLockPid ? t("agentSession.lockedByCliNotice", { pid: String(cliLockPid) }) : undefined}
                 style={{
                   display: "flex", alignItems: "center", gap: 6,
                   height: 28,
                   padding: "0 14px",
-                  background: (value.trim() || attachedImages.length || attachedFiles.length) && !isSubmitting ? "var(--accent-strong)" : "var(--bg-panel)",
+                  background: (value.trim() || attachedImages.length || attachedFiles.length || mentions.length) && !isSubmitting ? "var(--accent-strong)" : "var(--bg-panel)",
                   border: "none",
                   borderRadius: 8,
-                  color: (value.trim() || attachedImages.length || attachedFiles.length) && !isSubmitting ? "var(--on-accent)" : "var(--text-dim)",
-                  cursor: (value.trim() || attachedImages.length || attachedFiles.length) && !isSubmitting ? "pointer" : "not-allowed",
+                  color: (value.trim() || attachedImages.length || attachedFiles.length || mentions.length) && !isSubmitting ? "var(--on-accent)" : "var(--text-dim)",
+                  cursor: (value.trim() || attachedImages.length || attachedFiles.length || mentions.length) && !isSubmitting ? "pointer" : "not-allowed",
                   fontSize: 12,
-                  boxShadow: (value.trim() || attachedImages.length || attachedFiles.length) && !isSubmitting ? "var(--shadow-card)" : "none",
+                  boxShadow: (value.trim() || attachedImages.length || attachedFiles.length || mentions.length) && !isSubmitting ? "var(--shadow-card)" : "none",
                   transition: "background var(--dur-fast) var(--ease-out-warm), box-shadow var(--dur-fast) var(--ease-out-warm)",
                 }}
               >
