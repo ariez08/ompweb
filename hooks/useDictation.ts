@@ -161,6 +161,7 @@ export function useDictation({ onTranscript, onError, scope, identityMove }: Use
   // switch. A duplicated tab copies it, so it never stands in for the claim
   // token below. Created on first use, never during render.
   const ownerTokenRef = useRef<string | null>(null);
+
   const ownerToken = useCallback(() => {
     if (ownerTokenRef.current) return ownerTokenRef.current;
     let token: string | null = null;
@@ -722,6 +723,7 @@ export function useDictation({ onTranscript, onError, scope, identityMove }: Use
     setIsTranscribing(false);
     setIsReviewing(false);
     if (
+      !window.isSecureContext ||
       typeof navigator?.mediaDevices?.getUserMedia !== "function" ||
       typeof window === "undefined" ||
       typeof window.MediaRecorder === "undefined"
@@ -731,6 +733,13 @@ export function useDictation({ onTranscript, onError, scope, identityMove }: Use
       return;
     }
     try {
+      const permission = navigator.permissions?.query
+        ? await navigator.permissions.query({ name: "microphone" as PermissionName })
+        : null;
+      if (permission?.state === "denied") {
+        onError?.("Microphone access denied");
+        return;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 

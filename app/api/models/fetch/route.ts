@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
+import { MASKED_API_KEY, readModelsConfig } from "@/lib/omp/models-config";
+import { requestProfileContext } from "@/lib/omp/profile-cookie";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { apiKey, headers = {} } = body;
+    const { providerName, headers = {} } = body;
+    let { apiKey } = body;
     let { baseUrl } = body;
 
     if (!baseUrl || typeof baseUrl !== "string") {
@@ -14,6 +17,14 @@ export async function POST(req: Request) {
 
     // Normalize baseUrl: remove trailing slashes
     baseUrl = baseUrl.trim().replace(/\/+$/, "");
+
+    // /api/models-config masks stored keys before sending them to the browser.
+    // Resolve that placeholder here so model discovery can authenticate without
+    // ever exposing the real credential to the client.
+    if (apiKey === MASKED_API_KEY && typeof providerName === "string" && providerName.trim()) {
+      const storedProvider = readModelsConfig(requestProfileContext(req)).providers?.[providerName];
+      apiKey = storedProvider?.apiKey;
+    }
 
     // Prepare candidate endpoints to probe
     const candidateUrls = [

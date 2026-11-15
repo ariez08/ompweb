@@ -650,6 +650,7 @@ function BackendDiagnosticsFullView() {
   const isZh = locale.startsWith("zh");
   const [error, setError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
+  const [restartingWeb, setRestartingWeb] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const { diagnostics: diag, refresh, refreshing } = useBackendDiagnostics();
@@ -694,6 +695,41 @@ function BackendDiagnosticsFullView() {
       setRestarting(false);
     }
   }, [refreshDetails, t]);
+
+  const restartWeb = useCallback(async () => {
+    if (!window.confirm(t("diagnostics.restartWebConfirm"))) return;
+    setRestartingWeb(true);
+    setSuccess(t("diagnostics.restartWebStarting"));
+    setError(null);
+    try {
+      const res = await fetch("/api/omp-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "restart-web" }),
+      });
+      const data = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !data.success) throw new Error(data.error ?? "restart failed");
+
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        try {
+          const health = await fetch("/api/health", { cache: "no-store" });
+          if (health.ok) {
+            window.location.reload();
+            return;
+          }
+        } catch {
+          // The service is between processes; keep polling.
+        }
+      }
+      throw new Error(t("diagnostics.restartWebTimeout"));
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setError(msg);
+      toast.error(t("diagnostics.restartFailed"), msg);
+      setRestartingWeb(false);
+    }
+  }, [t]);
 
   const clearErrors = useCallback(async () => {
     setActionBusy(true);
@@ -938,6 +974,22 @@ function BackendDiagnosticsFullView() {
           >
             <RotateCcw size={13} className={restarting ? "animate-spin" : undefined} aria-hidden="true" />
             {restarting ? t("diagnostics.restarting") : t("diagnostics.restartRpc")}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void restartWeb()}
+            disabled={restartingWeb || restarting || actionBusy}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px",
+              borderRadius: "var(--radius-control)", background: "var(--accent)", color: "var(--on-accent)",
+              border: "none", fontSize: 12, fontWeight: 600,
+              cursor: restartingWeb || restarting || actionBusy ? "default" : "pointer",
+              opacity: restartingWeb || restarting || actionBusy ? 0.7 : 1,
+            }}
+          >
+            <RefreshCw size={13} className={restartingWeb ? "animate-spin" : undefined} aria-hidden="true" />
+            {restartingWeb ? t("diagnostics.restartingWeb") : t("diagnostics.restartWeb")}
           </button>
 
           <button

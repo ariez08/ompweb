@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { checkOmpUpdate, runOmpUpdateNow, runOmpUpdateStream } from "@/lib/omp/updates";
 import { clearRpcFailures, restartAllRpcSessions } from "@/lib/rpc-manager";
 import { hostClient } from "@/lib/omp/host-client";
@@ -56,6 +58,10 @@ export async function POST(request: Request) {
         reconnectRequired: true,
       });
     }
+    if (body.action === "restart-web") {
+      scheduleWebRestart();
+      return NextResponse.json({ success: true, restarting: true });
+    }
     if (body.action === "repair") {
       // 无损恢复动作（供自动静默修复与诊断面板「修复」按钮使用）：只清孤儿
       // Rust host + 清错误环，绝不重启用户 RPC 会话或 stop 其他实例，因此
@@ -102,12 +108,48 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, stopped: true, pid });
     }
     return NextResponse.json(
-      { error: "action must be check, restart or stop-instance", code: "invalid_action" },
+      { error: "action must be check, restart, restart-web or stop-instance", code: "invalid_action" },
       { status: 400 },
     );
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
+}
+
+/** Start a detached launcher before exiting this Next process. The helper waits
+ * for the current listener to disappear, then starts the same OMP Web service
+ * on the same port without touching the browser's current session state. */
+function scheduleWebRestart(): void {
+  const packageDir = process.env.OMP_WEB_PACKAGE_DIR ?? process.cwd();
+  const restartScript = join(packageDir, "bin", "omp-web-restart.js");
+  if (!existsSync(restartScript)) throw new Error("OMP Web restart helper is unavailable");
+
+  const port = Number(process.env.OMP_WEB_PORT ?? process.env.OMP_WEB_APP_PORT ?? process.env.PORT ?? "30177");
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("OMP Web port is invalid");
+
+  const hostname = process.env.OMP_WEB_HOSTNAME ?? "127.0.0.1";
+  const helper = spawn(process.execPath, [
+    restartScript,
+    "--pid", String(process.pid),
+    "--port", String(port),
+    "--hostname", hostname,
+    "--package-dir", packageDir,
+  ], {
+    cwd: packageDir,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+    env: { ...process.env, OMP_WEB_NO_OPEN: "1" },
+  });
+  helper.unref();
+
+  setTimeout(() => {
+    if (process.platform === "win32") {
+      process.exit(0);
+      return;
+    }
+    try { process.kill(process.pid, "SIGTERM"); } catch { process.exit(0); }
+  }, 150).unref();
 }
 
 /** 找出监听指定 TCP 端口的进程 pid（macOS/Linux lsof）。 */

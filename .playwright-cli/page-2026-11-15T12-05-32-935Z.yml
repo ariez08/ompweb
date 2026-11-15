@@ -1,0 +1,11 @@
+- generic [ref=e1]:
+  - main [ref=e2]:
+    - region "Welcome back" [ref=e3]:
+      - heading "Welcome back" [level=1] [ref=e9]
+      - paragraph [ref=e10]: Enter the password for this omp web workspace.
+      - generic [ref=e11]:
+        - generic [ref=e12]:
+          - text: Password
+          - textbox "Password" [active] [ref=e13]
+        - button "Unlock workspace" [ref=e14] [cursor=pointer]
+  - alert [ref=e15]

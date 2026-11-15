@@ -991,6 +991,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, takenNam
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          providerName: name,
           baseUrl: provider.baseUrl,
           apiKey: provider.apiKey,
           headers: provider.headers,
