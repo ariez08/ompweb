@@ -170,7 +170,19 @@ export function RemoteAccessSetting() {
                 <X size={14} aria-hidden="true" />
               </button>
             </div>
-            <QRCodeSVG value={qr.qrData} size={200} level="M" />
+            <div
+              style={{
+                display: "inline-flex",
+                padding: 10,
+                border: "6px solid #fff",
+                borderRadius: 6,
+                background: "#fff",
+                boxShadow: "0 0 0 1px rgba(0, 0, 0, 0.08)",
+              }}
+              aria-label="Pairing QR code"
+            >
+              <QRCodeSVG value={qr.qrData} size={200} level="M" bgColor="#fff" fgColor="#000" />
+            </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "center" }}>
               <code style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)", wordBreak: "break-all", maxWidth: "100%" }}>{qr.phoneUrl}</code>
               <button

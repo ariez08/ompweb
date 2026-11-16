@@ -3,12 +3,13 @@ $exitCode = 0
 try {
 $repo = $PSScriptRoot
 $stage = Join-Path $env:TEMP ('ompweb-build-' + [guid]::NewGuid().ToString('N'))
-$live = Join-Path $repo '.next\standalone'
+$live = Join-Path $repo '.next'
 $launcher = Join-Path $env:LOCALAPPDATA 'ompweb\start-ompweb.vbs'
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
 $preview = $null
 $backup = $null
+$backupBuild = $null
 
 function Invoke-BoundedProcess {
     param([string]$File, [string[]]$Arguments, [string]$WorkingDirectory, [int]$TimeoutSeconds)
@@ -21,8 +22,8 @@ function Invoke-BoundedProcess {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             throw "Process timed out: $File"
         }
-        if (Test-Path $stdout) { Get-Content -LiteralPath $stdout | Write-Host }
-        if (Test-Path $stderr) { Get-Content -LiteralPath $stderr | Write-Host }
+        if (Test-Path $stdout) { Get-Content -LiteralPath $stdout -Encoding UTF8 | Write-Host }
+        if (Test-Path $stderr) { Get-Content -LiteralPath $stderr -Encoding UTF8 | Write-Host }
         return $process.ExitCode
     } finally {
         Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
@@ -46,8 +47,9 @@ $env:PAGER = 'cat'
 $env:TERM = 'dumb'
 $buildCode = Invoke-BoundedProcess -File $env:ComSpec -Arguments @('/d', '/s', '/c', ('""' + $npm + '" run build"')) -WorkingDirectory $stage -TimeoutSeconds 600
 if ($buildCode -ne 0) { throw "Build failed: $buildCode" }
-$stagedStandalone = Join-Path $stage '.next\standalone'
-$buildId = (Get-Content -LiteralPath (Join-Path $stagedStandalone '.next\BUILD_ID') -Raw).Trim()
+$stagedBuild = Join-Path $stage '.next'
+$stagedStandalone = Join-Path $stagedBuild 'standalone'
+$buildId = (Get-Content -LiteralPath (Join-Path $stagedBuild 'BUILD_ID') -Raw).Trim()
 if (-not $buildId) { throw 'Staged BUILD_ID is empty.' }
 
 $previousEnv = @{}
@@ -73,15 +75,26 @@ try {
 
 Write-Warning 'Applying restarts ompweb and may terminate active sessions, terminals, and background jobs. Run this script from a separate PowerShell window.'
 if ((Read-Host 'Apply this build now? [y/N]') -notmatch '^(?i:y|yes)$') { Write-Host "Cancelled. Staged build: $stage"; return }
-$previousBuildId = (Get-Content -LiteralPath (Join-Path $live '.next\BUILD_ID') -Raw).Trim()
+$previousBuildId = (Get-Content -LiteralPath (Join-Path $live 'BUILD_ID') -Raw).Trim()
 if (-not $previousBuildId -or $previousBuildId -eq $buildId) { throw 'The new BUILD_ID is empty or matches the currently installed build; nothing was stopped.' }
 Write-Host "Previous BUILD_ID=$previousBuildId"
 Write-Host "New BUILD_ID=$buildId"
+if (Get-NetTCPConnection -LocalPort 30178 -State Listen -ErrorAction SilentlyContinue) { throw 'Development server port 30178 is in use; stop it before replacing the shared .next directory.' }
 $owners = @(Get-NetTCPConnection -LocalPort 30177 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
 if ($owners.Count -ne 1) { throw 'Expected exactly one owner for port 30177; nothing was stopped.' }
 $owner = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $owners[0]) -ErrorAction Stop
-if ($owner.Name -ne 'node.exe' -or $owner.CommandLine -notmatch 'request-peer-preload\.js' -or $owner.CommandLine -notmatch 'server\.js') { throw 'Port owner is not the expected ompweb process; nothing was stopped.' }
 $parent = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $owner.ParentProcessId) -ErrorAction SilentlyContinue
+$cliPreloadPath = [regex]::Escape((Join-Path $repo 'bin\request-peer-preload.js'))
+$cliNextPath = [regex]::Escape((Join-Path $repo 'node_modules\next\dist\bin\next'))
+$cliWrapperPath = [regex]::Escape((Join-Path $repo 'bin\omp-web.js'))
+$isExpectedCli = $owner.Name -eq 'node.exe' -and
+    $owner.CommandLine -match $cliPreloadPath -and
+    $owner.CommandLine -match $cliNextPath -and
+    $owner.CommandLine -match '(?i)\bstart\s+-p\s+30177\b' -and
+    $parent -and $parent.Name -eq 'node.exe' -and
+    $parent.CommandLine -match $cliWrapperPath -and
+    $parent.CommandLine -match '(?i)--port\s+30177\b'
+if (-not $isExpectedCli) { throw 'Port owner is not the expected ompweb CLI process; nothing was stopped.' }
 $launcherCmd = Join-Path $env:LOCALAPPDATA 'ompweb\start-ompweb.cmd'
 $launcherParentId = if ($parent -and $parent.Name -eq 'cmd.exe' -and $parent.CommandLine -and $parent.CommandLine.Contains($launcherCmd)) { $parent.ProcessId } else { $null }
 
@@ -97,34 +110,69 @@ try {
         }
     }
     Start-Sleep -Seconds 2
-    $backup = Join-Path $env:TEMP ('ompweb-standalone-old-' + [guid]::NewGuid().ToString('N'))
+    $backup = Join-Path $env:TEMP ('ompweb-next-old-' + [guid]::NewGuid().ToString('N'))
+    $backupBuild = Join-Path $backup '.next'
     New-Item -ItemType Directory -Path $backup -ErrorAction Stop | Out-Null
-    $oldItems = [System.Collections.Generic.List[string]]::new()
-    $newItems = [System.Collections.Generic.List[string]]::new()
-    try {
-        foreach ($item in Get-ChildItem -LiteralPath $live -Force) {
-            Move-Item -LiteralPath $item.FullName -Destination $backup -ErrorAction Stop
-            $oldItems.Add($item.Name)
+    $installOk = $false
+    $attempt = 0
+    while (-not $installOk) {
+        $attempt++
+        $candidate = Join-Path $repo ('.next-install-' + [guid]::NewGuid().ToString('N'))
+        $failedPath = Join-Path $stage ('.next-install-failed-' + $attempt)
+        try {
+            New-Item -ItemType Directory -Path $candidate -ErrorAction Stop | Out-Null
+            foreach ($item in Get-ChildItem -LiteralPath $stagedBuild -Force) {
+                Copy-Item -LiteralPath $item.FullName -Destination $candidate -Recurse -Force -ErrorAction Stop
+            }
+            if ((Get-Content -LiteralPath (Join-Path $candidate 'BUILD_ID') -Raw).Trim() -ne $buildId) { throw 'Copied build candidate has the wrong BUILD_ID.' }
+            Move-Item -LiteralPath $live -Destination $backupBuild -ErrorAction Stop
+            Move-Item -LiteralPath $candidate -Destination $live -ErrorAction Stop
+            if ((Get-Content -LiteralPath (Join-Path $live 'BUILD_ID') -Raw).Trim() -ne $buildId) { throw 'Installed BUILD_ID does not match the staged build.' }
+            $installOk = $true
+            break
+        } catch {
+            $installError = $_.Exception.Message
+            if ((Test-Path -LiteralPath $live) -and (Test-Path -LiteralPath $backupBuild)) {
+                Move-Item -LiteralPath $live -Destination $failedPath -ErrorAction Stop
+            }
+            if ((Test-Path -LiteralPath $backupBuild) -and -not (Test-Path -LiteralPath $live)) {
+                Move-Item -LiteralPath $backupBuild -Destination $live -ErrorAction Stop
+            }
+            if (Test-Path -LiteralPath $candidate) {
+                Move-Item -LiteralPath $candidate -Destination ($failedPath + '-candidate') -ErrorAction Stop
+            }
+            $retryInstall = Read-Host "Install attempt $attempt failed: $installError`nRetry this build install? [y/N]"
+            if ($retryInstall -notmatch '^(?i:y|yes)$') { throw "Install cancelled after failure; old build restored: $installError" }
+            Write-Host 'Retrying the install from the already-built files.'
         }
-        foreach ($item in Get-ChildItem -LiteralPath $stagedStandalone -Force) {
-            Move-Item -LiteralPath $item.FullName -Destination $live -ErrorAction Stop
-            $newItems.Add($item.Name)
-        }
-    } catch {
-        foreach ($name in $newItems) { Move-Item -LiteralPath (Join-Path $live $name) -Destination $stagedStandalone -ErrorAction Stop }
-        foreach ($name in $oldItems) { Move-Item -LiteralPath (Join-Path $backup $name) -Destination $live -ErrorAction Stop }
-        throw
     }
-    if ((Get-Content -LiteralPath (Join-Path $live '.next\BUILD_ID') -Raw).Trim() -ne $buildId) { throw 'Installed BUILD_ID does not match the staged build.' }
     Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $launcher + '"') -WindowStyle Hidden
     $launched = $true
     Start-Sleep -Seconds 8
-    $login = Invoke-WebRequest -Uri 'http://127.0.0.1:30177/login' -UseBasicParsing -TimeoutSec 10
-    $finalId = (Get-Content -LiteralPath (Join-Path $live '.next\BUILD_ID') -Raw).Trim()
-    $manifest = Invoke-WebRequest -Uri ("http://127.0.0.1:30177/_next/static/$buildId/_buildManifest.js") -UseBasicParsing -TimeoutSec 10
-    if ($login.StatusCode -ne 200 -or $manifest.StatusCode -ne 200 -or $finalId -ne $buildId -or $finalId -eq $previousBuildId) { throw 'Live build verification failed.' }
-    Write-Host "Applied successfully. BUILD_ID=$finalId"
-    Write-Host "Previous build: $backup"
+    $finalId = (Get-Content -LiteralPath (Join-Path $live 'BUILD_ID') -Raw).Trim()
+    if ($finalId -ne $buildId -or $finalId -eq $previousBuildId) { throw 'Installed BUILD_ID does not match the staged build.' }
+    $liveOwners = @(Get-NetTCPConnection -LocalPort 30177 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($liveOwners.Count -ne 1) { throw 'Build is installed, but the expected server is not listening on port 30177.' }
+    $liveOwner = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $liveOwners[0]) -ErrorAction Stop
+    $liveParent = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $liveOwner.ParentProcessId) -ErrorAction SilentlyContinue
+    $isLiveCli = $liveOwner.Name -eq 'node.exe' -and
+        $liveOwner.CommandLine -match $cliPreloadPath -and
+        $liveOwner.CommandLine -match $cliNextPath -and
+        $liveOwner.CommandLine -match '(?i)\bstart\s+-p\s+30177\b' -and
+        $liveParent -and $liveParent.Name -eq 'node.exe' -and
+        $liveParent.CommandLine -match $cliWrapperPath -and
+        $liveParent.CommandLine -match '(?i)--port\s+30177\b'
+    if (-not $isLiveCli) { throw 'Build is installed, but port 30177 is not owned by the expected ompweb CLI process.' }
+    try {
+        $login = Invoke-WebRequest -Uri 'http://127.0.0.1:30177/login' -UseBasicParsing -TimeoutSec 10
+        $manifest = Invoke-WebRequest -Uri ("http://127.0.0.1:30177/_next/static/$buildId/_buildManifest.js") -UseBasicParsing -TimeoutSec 10
+        if ($login.StatusCode -ne 200 -or $manifest.StatusCode -ne 200) { throw 'Login or build manifest returned a non-200 response.' }
+        Write-Host "Applied and verified successfully. BUILD_ID=$finalId"
+    } catch {
+        Write-Warning "Build is installed and the ompweb process is listening, but HTTP verification did not complete: $($_.Exception.Message)"
+        Write-Host "Build installed with verification warning. BUILD_ID=$finalId"
+    }
+    Write-Host "Previous build backup: $backupBuild"
 } catch {
     if ($stopped -and -not $launched) { Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $launcher + '"') -WindowStyle Hidden }
     if ($backup) { Write-Warning "Previous build backup: $backup" }
