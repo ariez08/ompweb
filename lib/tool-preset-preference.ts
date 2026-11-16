@@ -37,13 +37,6 @@ export function setPreferredToolPreset(preset: ToolPreset, storage: StorageLike 
   }
 }
 
-/** Coarse preset a full capability selection collapses to. */
-function presetToToolPreset(caps: SessionCapabilities): ToolPreset {
-  if (caps.preset === "chat_only") return "none";
-  if (caps.preset === "code_editor") return "default";
-  return "full";
-}
-
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
@@ -94,13 +87,29 @@ export function getPreferredCapabilities(storage: StorageLike | null = browserSt
   return { preset: "full_agent" };
 }
 
-export function setPreferredCapabilities(caps: SessionCapabilities, storage: StorageLike | null = browserStorage()): void {
+/** Tool/MCP/skill selection for ONE chat. The picker writes only here, so
+ *  changing tools in a session never rewrites another session's selection. */
+export function getSessionCapabilities(
+  sessionId: string,
+  storage: StorageLike | null = browserStorage(),
+): SessionCapabilities | null {
+  if (!storage) return null;
+  try {
+    return reviveCapabilities(storage.getItem(`${CAPABILITIES_STORAGE_KEY}:${sessionId}`));
+  } catch {
+    return null;
+  }
+}
+
+export function setSessionCapabilities(
+  sessionId: string,
+  caps: SessionCapabilities,
+  storage: StorageLike | null = browserStorage(),
+): void {
   if (!storage) return;
   try {
-    storage.setItem(CAPABILITIES_STORAGE_KEY, JSON.stringify(caps));
+    storage.setItem(`${CAPABILITIES_STORAGE_KEY}:${sessionId}`, JSON.stringify(caps));
   } catch {
     // Preferences remain optional when storage is unavailable.
   }
-  // Keep the coarse key in sync so `toolPreset` state and older readers agree.
-  setPreferredToolPreset(presetToToolPreset(caps), storage);
 }

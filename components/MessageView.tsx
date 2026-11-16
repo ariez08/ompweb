@@ -170,7 +170,10 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
   }
   if (message.role === "custom") {
     const custom = message as CustomMessage;
-    if (custom.customType === "xdev-mount-notice") {
+    // omp-native context injections with no user value: the eval runtime
+    // snapshot is appended on every child respawn / display-context rebuild,
+    // so surfacing it fills the transcript with one identical pill per turn.
+    if (custom.customType === "xdev-mount-notice" || custom.customType === "eval-state-context") {
       return null;
     }
     if (custom.customType === "compaction") {
@@ -828,6 +831,7 @@ const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const prefetchStartedRef = useRef(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
 
   // 自动展开规则（用户手动切换优先）：
   // 只有在「流式输出中 且 这是消息内最新内容块」时思考块才自动展开；
@@ -844,17 +848,36 @@ const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, 
 
   // Deferred thinking keeps the first session payload light, but an empty
   // expanded shell is misleading and makes the user click twice (open, then
-  // wait for the body). Prefetch once when the row mounts so a later click is
-  // instant while preserving the default-collapsed presentation.
-  useEffect(() => {
-    if (!block.deferred || content !== null || prefetchStartedRef.current || !sessionId || !entryId) return;
+  // wait for the body). Prefetch so a later click is instant — but only for
+  // rows near the viewport: the request re-reads and re-parses the session
+  // file server-side, and a long run mounts dozens of these rows while the
+  // file is still growing, so a mount-time prefetch storm costs far more than
+  // it saves.
+  const prefetch = useCallback(() => {
     prefetchStartedRef.current = true;
     setLoading(true);
-    void loadThinkingContent(sessionId, entryId, blockIndex)
+    setError(null);
+    void loadThinkingContent(sessionId ?? "", entryId ?? "", blockIndex)
       .then((text) => setContent(text))
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [block.deferred, blockIndex, content, entryId, sessionId]);
+  }, [blockIndex, entryId, sessionId]);
+
+  useEffect(() => {
+    if (!block.deferred || content !== null || prefetchStartedRef.current || !sessionId || !entryId) return;
+    const row = rowRef.current;
+    if (!row || typeof IntersectionObserver === "undefined") {
+      prefetch();
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      prefetch();
+    }, { rootMargin: "300px 0px" });
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [block.deferred, content, entryId, sessionId, prefetch]);
 
   const handleOpenChange = (nextOpen: boolean) => {
     setUserToggled(nextOpen);
@@ -863,18 +886,11 @@ const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, 
       setError(t("messageView.thinkingUnavailable"));
       return;
     }
-
-    prefetchStartedRef.current = true;
-    setLoading(true);
-    setError(null);
-    void loadThinkingContent(sessionId, entryId, blockIndex)
-      .then((text) => setContent(text))
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false));
+    prefetch();
   };
 
   return (
-    <div className="activity-row" data-activity-operation="true">
+    <div className="activity-row" data-activity-operation="true" ref={rowRef}>
       <Collapsible open={expanded} onOpenChange={handleOpenChange}>
         <CollapsibleTrigger className="activity-row-trigger">
           <span className="activity-row-indicator" aria-hidden>

@@ -28,8 +28,10 @@ const MAX_RESTARTS: u32 = 3;
 
 #[derive(Clone)]
 pub enum SessionEvent {
-    /// A complete logical RPC frame (JSON text) from the child.
-    Frame(String),
+    /// A complete logical RPC frame (JSON text) from the child, tagged with
+    /// the session-scoped broadcast sequence so a reattaching client can
+    /// dedupe replayed frames it already delivered.
+    Frame { seq: u64, frame: String },
     /// Child exited (after restarts exhausted or graceful).
     Exited {
         code: Option<i32>,
@@ -50,14 +52,23 @@ struct Session {
     /// Bounded replay ring: frames emitted before a subscriber attaches are
     /// replayed so late attach (fast omp startup) still sees ready/init
     /// frames. Keeps the ring tight (64 x up-to-1MiB is bounded by the frame
-    /// cap; normal frames are far smaller).
-    ring: std::collections::VecDeque<String>,
+    /// cap; normal frames are far smaller). Each entry carries the
+    /// session-scoped sequence so a reattaching client can dedupe replayed
+    /// frames it already delivered live.
+    ring: std::collections::VecDeque<(u64, String)>,
+    /// Monotonic per-session frame sequence, assigned at broadcast time.
+    next_seq: u64,
 }
 
 pub struct Supervisor {
     sessions: Mutex<HashMap<String, Session>>,
     omp_bin: String,
     omp_env: Vec<(String, String)>,
+    /// Sessions whose last subscriber was dropped by a full channel: the
+    /// subscriber's stream closed while the child kept streaming, so frames
+    /// were lost. The next agent.attach reattaches (replay + gap notice)
+    /// instead of silently resuming mid-stream.
+    gapped: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Supervisor {
@@ -66,6 +77,7 @@ impl Supervisor {
             sessions: Mutex::new(HashMap::new()),
             omp_bin,
             omp_env: env,
+            gapped: Mutex::new(std::collections::HashSet::new()),
         })
     }
 
@@ -104,6 +116,7 @@ impl Supervisor {
             killed: false,
             args: extra_args.to_vec(),
             ring: std::collections::VecDeque::new(),
+            next_seq: 0,
         };
         guard.insert(session_id.to_string(), session);
         drop(guard);
@@ -111,14 +124,44 @@ impl Supervisor {
         Ok((pid, 0))
     }
 
-    /// Subscribe to a session's event stream. Returns a receiver that gets
-    /// Frame/Exited events until the session ends.
-    pub fn subscribe(&self, session_id: &str) -> Result<Receiver<SessionEvent>, String> {
+    /// Subscribe to a session's event stream. Returns (receiver, replay
+    /// snapshot, has_gap). The subscription and the snapshot are taken under
+    /// one lock so a frame arriving concurrently is either in both (the
+    /// subscriber dedupes by seq) or in neither — the initial attach can
+    /// never miss ready/init frames, and replay is never duplicated.
+    ///
+    /// `since_seq` filters the snapshot to frames the client has not yet
+    /// delivered (reattach dedupe); 0 = replay everything.
+    ///
+    /// `has_gap` is true when the session's last subscriber was dropped by a
+    /// full channel: frames were lost between subscribers and the client
+    /// must be told (rpc_stream_gap) rather than silently resuming.
+    pub fn subscribe_from(
+        &self,
+        session_id: &str,
+        since_seq: u64,
+    ) -> Result<(Receiver<SessionEvent>, Vec<(u64, String)>, bool), String> {
         let mut guard = self.sessions.lock().unwrap();
         let session = guard.get_mut(session_id).ok_or("no such session")?;
         let (tx, rx) = sync_channel(64);
         session.subscribers.push(tx);
-        Ok(rx)
+        let replay: Vec<(u64, String)> = session
+            .ring
+            .iter()
+            .filter(|(seq, _)| *seq > since_seq)
+            .cloned()
+            .collect();
+        let mut gapped = self.gapped.lock().unwrap();
+        let has_gap = gapped.remove(session_id);
+        drop(guard);
+        Ok((rx, replay, has_gap))
+    }
+
+    /// Mark a session as having lost frames: its last subscriber was dropped
+    /// because the channel was full, so live frames after the drop never
+    /// reached any client.
+    fn mark_gapped(&self, session_id: &str) {
+        self.gapped.lock().unwrap().insert(session_id.to_string());
     }
 
     fn spawn_child(&self, cwd: &str, extra_args: &[String]) -> Result<Child, String> {
@@ -222,16 +265,16 @@ impl Supervisor {
         let mut line: Vec<u8> = Vec::new();
         loop {
             line.clear();
-            match read_line_capped(&mut reader, &mut line, MAX_RPC_FRAME_BYTES) {
-                Ok(0) => break,
-                Ok(_) => {
+            match read_line_capped(&mut reader, &mut line, MAX_RPC_REASSEMBLED_BYTES) {
+                Ok(Some(0)) => break,
+                Ok(Some(_)) => {
                     // Byte-accurate line; lossy UTF-8 (pipe segments can split
                     // multi-byte characters — a String-based reader would die
                     // on the boundary and stall the stream).
                     let text = String::from_utf8_lossy(&line);
                     match decoder.push_line(&text) {
                         Ok(Some(frame)) => {
-                            self.broadcast(&session_id, SessionEvent::Frame(frame));
+                            self.broadcast(&session_id, SessionEvent::Frame { seq: 0, frame });
                         }
                         Ok(None) => {}
                         Err(_) => {
@@ -240,6 +283,7 @@ impl Supervisor {
                         }
                     }
                 }
+                Ok(None) => decoder.reset(),
                 Err(_) => break,
             }
         }
@@ -286,6 +330,7 @@ impl Supervisor {
                         session.stdin = Arc::new(Mutex::new(new_stdin));
                         session.restarts = restarts + 1;
                         session.ring.clear();
+                        session.next_seq = 0;
                     } else {
                         drop(guard);
                         crate::command_service::terminate_process_tree(&mut new_child);
@@ -295,12 +340,12 @@ impl Supervisor {
                         return;
                     }
                 }
-                self.broadcast(&session_id, SessionEvent::Frame(format!(
+                self.broadcast(&session_id, SessionEvent::Frame { seq: 0, frame: format!(
                     "{{\"type\":\"session_restarted\",\"sessionId\":{},\"pid\":{},\"restarts\":{}}}",
                     crate::ipc_server::json_str(&session_id),
                     new_pid,
                     restarts + 1
-                )));
+                )});
                 self.start_reader(session_id.clone(), cwd, restarts + 1);
                 return;
             }
@@ -313,25 +358,53 @@ impl Supervisor {
     fn broadcast(&self, session_id: &str, event: SessionEvent) {
         let mut guard = self.sessions.lock().unwrap();
         if let Some(session) = guard.get_mut(session_id) {
+            // Assign the session-scoped sequence under the same lock that
+            // publishes to subscribers and the replay ring: a reattaching
+            // client either sees a frame in both or neither.
+            let seq = if let SessionEvent::Frame { .. } = &event {
+                session.next_seq += 1;
+                Some(session.next_seq)
+            } else {
+                None
+            };
+            let tagged = match (&event, seq) {
+                (SessionEvent::Frame { frame, .. }, Some(seq)) => {
+                    SessionEvent::Frame { seq, frame: frame.clone() }
+                }
+                _ => event,
+            };
+            let mut dropped = false;
             session
                 .subscribers
                 // Disconnect slow consumers; their attach stream closes once
                 // drained and the client reconciles. Never grow an unbounded
                 // channel or block another session behind a stalled consumer.
-                .retain(|sub| sub.try_send(event.clone()).is_ok());
-            if let SessionEvent::Frame(frame) = &event {
+                .retain(|sub| {
+                    let sent = sub.try_send(tagged.clone()).is_ok();
+                    if !sent { dropped = true; }
+                    sent
+                });
+            if dropped && session.subscribers.is_empty() {
+                // Every consumer was dropped: everything after this frame is
+                // lost until a client reattaches.
+                self.mark_gapped(session_id);
+            }
+            if let SessionEvent::Frame { frame, .. } = &tagged {
                 const REPLAY_BYTES: usize = 4 * 1024 * 1024;
+                let seq = seq.unwrap_or_default();
                 while !session.ring.is_empty() && (session.ring.len() >= 64 ||
-                    session.ring.iter().map(String::len).sum::<usize>() + frame.len() > REPLAY_BYTES) {
+                    session.ring.iter().map(|(_, f)| f.len()).sum::<usize>() + frame.len() > REPLAY_BYTES) {
                     session.ring.pop_front();
                 }
-                if frame.len() <= REPLAY_BYTES { session.ring.push_back(frame.clone()); }
+                if frame.len() <= REPLAY_BYTES { session.ring.push_back((seq, frame.clone())); }
             }
         }
     }
 
-    /// Frames recorded before this subscriber attached (bounded replay).
-    pub fn recent_frames(&self, session_id: &str) -> Vec<String> {
+    /// Frames recorded before this subscriber attached (bounded replay),
+    /// each tagged with its session sequence for client-side dedupe.
+    #[allow(dead_code)] // legacy replay surface; agent.attach uses subscribe_from
+    pub fn recent_frames(&self, session_id: &str) -> Vec<(u64, String)> {
         let guard = self.sessions.lock().unwrap();
         match guard.get(session_id) {
             Some(session) => session.ring.iter().cloned().collect(),
@@ -353,47 +426,33 @@ fn signal_of(status: &std::process::ExitStatus) -> Option<i32> {
     }
 }
 
-/// Read one line capped at `cap` bytes into a byte buffer; Ok(0) at EOF.
+/// Read one bounded line; None means an oversized line was drained.
 /// Byte-based (no UTF-8 validation per segment): pipe reads can split a
 /// multi-byte character, and a String-based accumulator would fail on the
 /// boundary and stall the whole stream.
-fn read_line_capped(
-    reader: &mut BufReader<std::process::ChildStdout>,
+fn read_line_capped<R: BufRead>(
+    reader: &mut R,
     line: &mut Vec<u8>,
     cap: usize,
-) -> std::io::Result<usize> {
-    let mut total = 0usize;
+) -> std::io::Result<Option<usize>> {
+    let mut too_large = false;
     loop {
         let buf = reader.fill_buf()?;
         if buf.is_empty() {
-            return Ok(total);
+            return Ok(if too_large { None } else { Some(line.len()) });
         }
-        match buf.iter().position(|b| *b == b'\n') {
-            Some(idx) => {
-                let take = idx + 1;
-                if total + take > cap {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "rpc line exceeds 1MiB",
-                    ));
-                }
+        let newline = buf.iter().position(|b| *b == b'\n');
+        let take = newline.map_or(buf.len(), |idx| idx + 1);
+        if !too_large {
+            if take > cap.saturating_sub(line.len()) {
+                too_large = true;
+            } else {
                 line.extend_from_slice(&buf[..take]);
-                reader.consume(take);
-                total += take;
-                return Ok(total);
             }
-            None => {
-                if total + buf.len() > cap {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "rpc line exceeds 1MiB",
-                    ));
-                }
-                line.extend_from_slice(buf);
-                let len = buf.len();
-                reader.consume(len);
-                total += len;
-            }
+        }
+        reader.consume(take);
+        if newline.is_some() {
+            return Ok(if too_large { None } else { Some(line.len()) });
         }
     }
 }
@@ -420,6 +479,32 @@ impl FrameReassembler {
         }
     }
 
+    /// Clears any in-flight chunk sequence so a malformed/interrupted one
+    /// cannot poison every later frame.
+    fn reset(&mut self) {
+        self.pending_chunk_id = None;
+        self.pending_count = 0;
+        self.pending_byte_length = 0;
+        self.pending_next_index = 0;
+        self.pending_parts.clear();
+        self.pending_received = 0;
+    }
+
+    /// Chunk metadata arrives as JSON numbers (JS JSON.stringify) and
+    /// historically as strings; accept both. `as_str` on a parsed number
+    /// returns None, which silently rejected every v2 chunk.
+    fn meta_usize(value: &JsonValue, key: &str) -> usize {
+        match value.get(&[key]) {
+            Some(JsonValue::Num(n))
+                if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 =>
+            {
+                if *n <= usize::MAX as f64 { *n as usize } else { usize::MAX }
+            }
+            Some(JsonValue::Str(s)) => s.parse::<usize>().unwrap_or(usize::MAX),
+            _ => usize::MAX,
+        }
+    }
+
     fn push_line(&mut self, line: &str) -> Result<Option<String>, String> {
         let value = JsonValue::parse(line.trim()).map_err(|e| e.to_string())?;
         let kind = value
@@ -428,9 +513,10 @@ impl FrameReassembler {
             .unwrap_or("")
             .to_string();
         if kind != "rpc_chunk" {
-            if self.pending_chunk_id.is_some() {
-                return Err("chunk sequence interrupted".into());
-            }
+            self.reset();
+            // A normal frame after an interrupted chunk sequence is DELIVERED,
+            // not discarded — dropping it would hide agent_end / RPC responses
+            // behind one broken chunk.
             return Ok(Some(line.trim().to_string()));
         }
         let chunk_id = value
@@ -438,21 +524,9 @@ impl FrameReassembler {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let index = value
-            .get(&["index"])
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(usize::MAX);
-        let count = value
-            .get(&["count"])
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(usize::MAX);
-        let byte_length = value
-            .get(&["byteLength"])
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(usize::MAX);
+        let index = Self::meta_usize(&value, "index");
+        let count = Self::meta_usize(&value, "count");
+        let byte_length = Self::meta_usize(&value, "byteLength");
         let data = value.get(&["data"]).and_then(|v| v.as_str()).unwrap_or("");
         if chunk_id.is_empty()
             || chunk_id.len() > 128
@@ -460,11 +534,24 @@ impl FrameReassembler {
             || index >= count
             || byte_length > MAX_RPC_REASSEMBLED_BYTES
         {
+            self.reset();
             return Err("invalid chunk metadata".into());
         }
-        let bytes = decode_base64(data)?;
+        let bytes = match decode_base64(data) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                self.reset();
+                return Err(err);
+            }
+        };
+        // Mirrors RpcFrameDecoder's transport cap on a single chunk payload.
+        if bytes.len() > RPC_CHUNK_PAYLOAD_BYTES {
+            self.reset();
+            return Err("chunk payload exceeds the transport limit".into());
+        }
         if self.pending_chunk_id.is_none() {
             if index != 0 {
+                self.reset();
                 return Err("chunk sequence must start at index 0".into());
             }
             self.pending_chunk_id = Some(chunk_id.clone());
@@ -479,25 +566,33 @@ impl FrameReassembler {
             || self.pending_byte_length != byte_length
             || self.pending_next_index != index
         {
+            self.reset();
             return Err("chunk sequence mismatch".into());
         }
-        self.pending_parts.push(bytes.clone());
         self.pending_received += bytes.len();
+        self.pending_parts.push(bytes);
         self.pending_next_index += 1;
         if self.pending_received > self.pending_byte_length {
+            self.reset();
             return Err("chunk exceeds declared length".into());
         }
         if self.pending_next_index < self.pending_count {
             return Ok(None);
         }
         if self.pending_received != self.pending_byte_length {
+            self.reset();
             return Err("chunk length mismatch".into());
         }
         self.pending_chunk_id = None;
-        let mut json = String::new();
+        let mut bytes_all = Vec::with_capacity(self.pending_received);
         for part in &self.pending_parts {
-            json.push_str(&String::from_utf8_lossy(part));
+            bytes_all.extend_from_slice(part);
         }
+        self.reset();
+        // Strict single decode at reassembly end, matching the TS decoder's
+        // TextDecoder(fatal) — lossy per-chunk decoding corrupts multi-byte
+        // characters split across chunk boundaries.
+        let json = String::from_utf8(bytes_all).map_err(|e| e.to_string())?;
         // Parse to validate, then return the reassembled JSON text.
         JsonValue::parse(&json).map_err(|e| e.to_string())?;
         Ok(Some(json))
@@ -515,7 +610,14 @@ pub fn encode_rpc_frames(frame_json: &str) -> Result<Vec<String>, String> {
         return Err("frame exceeds reassembly limit".into());
     }
     let count = bytes.len().div_ceil(RPC_CHUNK_PAYLOAD_BYTES);
-    let chunk_id = format!("rust-{}", std::process::id());
+    // Unique per call: two concurrent oversized sends from the same process
+    // must not share a chunkId (the receiver would interleave their parts).
+    static CHUNK_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let chunk_id = format!(
+        "rust-{}-{}",
+        std::process::id(),
+        CHUNK_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     let mut lines = Vec::with_capacity(count);
     for index in 0..count {
         let start = index * RPC_CHUNK_PAYLOAD_BYTES;
@@ -611,7 +713,7 @@ mod lifecycle_tests {
         s.send("session", "{\"type\":\"get_state\"}").unwrap();
         let mut responded = false;
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(500)) {
-            if let SessionEvent::Frame(text) = event {
+            if let SessionEvent::Frame { frame: text, .. } = event {
                 if text.contains("response") { responded = true; break; }
             }
         }
@@ -650,5 +752,198 @@ mod lifecycle_tests {
         s.kill("session").unwrap();
         assert!(start.elapsed() < Duration::from_secs(1));
         std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod reassembler_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_line_is_drained_before_reading_terminal_frame() {
+        let input = b"0123456789abcdef\n{\"type\":\"agent_end\"}\n";
+        let mut reader = BufReader::with_capacity(4, &input[..]);
+        let mut line = Vec::new();
+        assert_eq!(read_line_capped(&mut reader, &mut line, 8).unwrap(), None);
+        assert!(line.len() <= 8);
+        line.clear();
+        assert!(read_line_capped(&mut reader, &mut line, 64).unwrap().unwrap() > 0);
+        assert_eq!(line, b"{\"type\":\"agent_end\"}\n");
+    }
+
+    #[test]
+    fn unchunked_frame_larger_than_wire_chunk_is_read() {
+        let frame = format!("{{\"type\":\"agent_end\",\"data\":\"{}\"}}\n", "x".repeat(MAX_RPC_FRAME_BYTES));
+        let mut reader = BufReader::with_capacity(4096, frame.as_bytes());
+        let mut line = Vec::new();
+        let size = read_line_capped(&mut reader, &mut line, MAX_RPC_REASSEMBLED_BYTES).unwrap();
+        assert_eq!(size, Some(frame.len()));
+        assert_eq!(line, frame.as_bytes());
+    }
+
+    fn chunk_line(id: &str, index: usize, count: usize, byte_length: usize, data: &str) -> String {
+        format!(
+            "{{\"type\":\"rpc_chunk\",\"chunkId\":{},\"index\":{},\"count\":{},\"byteLength\":{},\"data\":{}}}",
+            crate::ipc_server::json_str(id),
+            index,
+            count,
+            byte_length,
+            crate::ipc_server::json_str(data)
+        )
+    }
+
+    #[test]
+    fn numeric_chunk_metadata_reassembles() {
+        // JS JSON.stringify emits numbers; as_str() would reject these.
+        let frame = r#"{"m":"abcd"}"#;
+        let mut decoder = FrameReassembler::new();
+        let bytes = frame.as_bytes();
+        let half = bytes.len() / 2;
+        let data0 = encode_base64(&bytes[..half]);
+        let data1 = encode_base64(&bytes[half..]);
+        assert!(decoder
+            .push_line(&chunk_line("n1", 0, 2, bytes.len(), &data0))
+            .unwrap()
+            .is_none());
+        let done = decoder
+            .push_line(&chunk_line("n1", 1, 2, bytes.len(), &data1))
+            .unwrap()
+            .expect("numeric metadata must reassemble");
+        assert_eq!(done, frame);
+    }
+
+    #[test]
+    fn malformed_chunk_does_not_poison_later_frames() {
+        let mut decoder = FrameReassembler::new();
+        // Invalid metadata (index >= count) arms nothing but must not wedge
+        // the decoder.
+        assert!(decoder.push_line(&chunk_line("bad", 5, 2, 9, "AAAA")).is_err());
+        // A subsequent valid single frame flows through untouched.
+        let frame = r#"{"type":"response"}"#;
+        assert_eq!(decoder.push_line(frame).unwrap().as_deref(), Some(frame));
+    }
+
+    #[test]
+    fn interrupted_chunk_sequence_resets_and_delivers_next_frame() {
+        let mut decoder = FrameReassembler::new();
+        // Start a pending sequence whose first chunk is valid, then interrupt
+        // it with a normal frame before the rest arrives. Chunks must respect
+        // the 256 KiB per-chunk payload cap, so use a small sequence.
+        let big = "z".repeat(512 * 1024);
+        let bytes = big.as_bytes();
+        let half = bytes.len() / 2;
+        decoder
+            .push_line(&chunk_line("gone", 0, 2, bytes.len(), &encode_base64(&bytes[..half])))
+            .unwrap();
+        // A normal frame arrives mid-sequence: it must be DELIVERED (not
+        // discarded) even though the pending chunk sequence is aborted.
+        let control = r#"{"type":"agent_end"}"#;
+        assert_eq!(
+            decoder.push_line(control).unwrap().as_deref(),
+            Some(control),
+            "normal frame after interrupted chunks must not be dropped"
+        );
+        // And the decoder is usable for a fresh chunk sequence afterwards.
+        let frame = r#"{"m":"ok"}"#;
+        let fb = frame.as_bytes();
+        decoder
+            .push_line(&chunk_line("next", 0, 2, fb.len(), &encode_base64(&fb[..fb.len() / 2])))
+            .unwrap();
+        let done = decoder
+            .push_line(&chunk_line("next", 1, 2, fb.len(), &encode_base64(&fb[fb.len() / 2..])))
+            .unwrap()
+            .expect("fresh sequence after reset must reassemble");
+        assert_eq!(done, frame);
+    }
+
+    #[test]
+    fn mismatched_chunk_resets_and_recovers() {
+        let mut decoder = FrameReassembler::new();
+        decoder
+            .push_line(&chunk_line("a", 0, 2, 4, &encode_base64(b"ab")))
+            .unwrap();
+        // Wrong chunkId for index 1.
+        assert!(decoder
+            .push_line(&chunk_line("b", 1, 2, 4, &encode_base64(b"cd")))
+            .is_err());
+        // Next frames are unaffected.
+        let frame = r#"{"k":true}"#;
+        assert_eq!(decoder.push_line(frame).unwrap().as_deref(), Some(frame));
+    }
+
+    #[test]
+    fn chunk_payload_over_transport_cap_rejected() {
+        let mut decoder = FrameReassembler::new();
+        let oversized = encode_base64(&vec![b'q'; RPC_CHUNK_PAYLOAD_BYTES + 1]);
+        assert!(decoder
+            .push_line(&chunk_line("big", 0, 2, 1024, &oversized))
+            .is_err());
+        let frame = r#"{"after":1}"#;
+        assert_eq!(decoder.push_line(frame).unwrap().as_deref(), Some(frame));
+    }
+
+    #[test]
+    fn utf8_split_across_chunk_boundary_survives() {
+        // "你好" is 6 bytes; split inside the first character's 3-byte
+        // sequence — strict whole-frame decoding must still succeed.
+        let frame = "{\"text\":\"你好\"}";
+        let bytes = frame.as_bytes();
+        let mut decoder = FrameReassembler::new();
+        decoder
+            .push_line(&chunk_line("u8", 0, 2, bytes.len(), &encode_base64(&bytes[..4])))
+            .unwrap();
+        let done = decoder
+            .push_line(&chunk_line("u8", 1, 2, bytes.len(), &encode_base64(&bytes[4..])))
+            .unwrap()
+            .expect("CJK split across chunks must reassemble");
+        assert_eq!(done, frame);
+    }
+
+    #[test]
+    fn invalid_utf8_reassembly_rejected_not_lossy() {
+        let mut decoder = FrameReassembler::new();
+        let bad = [0xFF, 0xFE];
+        decoder
+            .push_line(&chunk_line("bad", 0, 2, 2, &encode_base64(&bad[..1])))
+            .unwrap();
+        assert!(decoder
+            .push_line(&chunk_line("bad", 1, 2, 2, &encode_base64(&bad[1..])))
+            .is_err());
+    }
+
+    #[test]
+    fn oversized_logical_frame_chunks_with_unique_ids() {
+        let big = format!("{{\"blob\":\"{}\"}}", "w".repeat(MAX_RPC_FRAME_BYTES + 42));
+        let lines = encode_rpc_frames(&big).expect("v2 encode must chunk oversized frames");
+        assert!(lines.len() > 1, "must be split into chunks");
+        for (i, line) in lines.iter().enumerate() {
+            assert!(line.len() <= MAX_RPC_FRAME_BYTES, "physical line cap");
+            let value = JsonValue::parse(line.trim()).unwrap();
+            assert_eq!(value.get(&["index"]), Some(&JsonValue::Num(i as f64)));
+            assert_eq!(
+                value.get(&["count"]),
+                Some(&JsonValue::Num(lines.len() as f64))
+            );
+            // Every chunk shares one id within a frame, unique across frames.
+            let id = value.get(&["chunkId"]).unwrap().as_str().unwrap();
+            assert!(id.starts_with("rust-"));
+        }
+        // A second encode produces a different chunkId (no cross-frame collision).
+        let lines2 = encode_rpc_frames(&big).unwrap();
+        let id1 = JsonValue::parse(lines[0].trim())
+            .unwrap()
+            .get(&["chunkId"])
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        let id2 = JsonValue::parse(lines2[0].trim())
+            .unwrap()
+            .get(&["chunkId"])
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(id1, id2, "concurrent sends must not share a chunkId");
     }
 }

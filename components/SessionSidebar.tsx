@@ -16,7 +16,8 @@ import { clearLastOpenSession, getLastOpenSession, setLastOpenSession, workspace
 import { groupSessionsByProject, projectActivityCounts, sortManagedProjects } from "@/lib/project-ordering";
 import { comparableProjectPath } from "@/lib/comparable-path";
 import { compileSearchQuery, FIRST_MESSAGE_WEIGHT, scoreSearchFields, searchField, TITLE_WEIGHT } from "@/lib/session-search";
-import { Archive, Check, ChevronDown, ChevronRight, FileUp, Folder, FolderSearch, GitBranch, LoaderCircle, MoreHorizontal, PanelsTopLeft, Play, Plus, RefreshCw, Rocket, Search, Settings2, SlidersHorizontal, Smartphone, Trash2, Upload, Wrench } from "lucide-react";
+import { Archive, Check, ChevronDown, ChevronRight, FileUp, Folder, FolderSearch, GitBranch, History, LoaderCircle, MoreHorizontal, PanelsTopLeft, Play, Plus, RefreshCw, Rocket, Search, Settings2, SlidersHorizontal, Smartphone, Trash2, Upload, Wrench } from "lucide-react";
+import { applyStableOrder, createStableOrderSnapshot, pruneStableOrder, readSessionRecency, recordSessionInteraction, writeSessionRecency } from "@/lib/recent-sessions";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
 import { UsageSidebarPanel } from "./UsageSidebarPanel";
 import { ProfileSwitcher } from "./ProfileSwitcher";
@@ -197,6 +198,26 @@ function loadExplorerOpen(): boolean {
     return raw === "true";
   } catch {
     return false;
+  }
+}
+
+const RECENT_MODE_STORAGE_KEY = "omp-web:sidebar-recent-mode";
+
+function loadRecentMode(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(RECENT_MODE_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveRecentMode(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(RECENT_MODE_STORAGE_KEY, enabled ? "true" : "false");
+  } catch {
+    // ignore storage quota / privacy-mode errors
   }
 }
 
@@ -848,6 +869,10 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
   // so a switch takes effect before React commits the state change.
   const [viewProfile, setViewProfile] = useState<string | null>(null);
   const viewProfileRef = useRef<string | null>(null);
+  // Flat recent list starts capped like the per-project list, with one
+  // show-more row instead of endless scrolling.
+  const [recentShowAll, setRecentShowAll] = useState(false);
+
   // `?all=1` aggregate buckets for the read-only cross-profile section (D-3);
   // null until the first aggregate response lands.
   const [profileBuckets, setProfileBuckets] = useState<ProfileSessionBucket[] | null>(null);
@@ -858,6 +883,19 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [runningOnly, setRunningOnly] = useState(false);
+  // Flat "recent" view: one list of every session across workspaces, ordered
+  // by the last interaction (newest first) instead of grouped per project.
+  // Persisted so the choice survives reloads.
+  const [recentMode, setRecentMode] = useState<boolean>(() => loadRecentMode());
+  // Locally recorded interactions (opening a session counts even though it
+  // does not touch the session file), merged with file mtime for ordering.
+  const [sessionRecency, setSessionRecency] = useState<Map<string, number>>(() => readSessionRecency());
+  // Pins each session to the slot it held when first seen, so the Recent list
+  // (and per-project trees) stay PERSISTENT across live SSE refreshes instead
+  // of reshuffling every time a session's file mtime bumps. Lives in a ref so
+  // it survives re-renders but resets on a full page reload — the one moment
+  // the list is allowed to re-order.
+  const stableOrderRef = useRef(createStableOrderSnapshot());
   // Transcript matches come from a streamed server scan: title hits land
   // instantly, body hits follow as batches arrive.
   const [transcriptSearch, setTranscriptSearch] = useState<{ query: string; scores: Record<string, number> } | null>(null);
@@ -1435,6 +1473,25 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
       controller.abort();
     };
   }, [trimmedSearchQuery]);
+  // Freeze a stable rank for every currently-visible session (shared by the
+  // flat Recent list and the grouped per-project trees). Running the snapshot
+  // over the full set here means a session keeps the same frozen slot in both
+  // views, and the snapshot is seeded even before the Recent memo runs.
+  // Pruning also happens against this full set: filtering (search, running-only)
+  // must never drop the ranks of the rows currently filtered out.
+  const stableRanksFor = useMemo(() => {
+    applyStableOrder(visibleSessions, sessionRecency, stableOrderRef.current);
+    pruneStableOrder(stableOrderRef.current, visibleSessions);
+    const ranks = stableOrderRef.current.ranks;
+    return (sessions: SessionInfo[]): Map<string, number> => {
+      const m = new Map<string, number>();
+      for (const s of sessions) {
+        const r = ranks.get(s.id);
+        if (r !== undefined) m.set(s.id, r);
+      }
+      return m;
+    };
+  }, [visibleSessions, sessionRecency]);
   const visibleProjectEntries = useMemo(() => {
     const query = compileSearchQuery(trimmedSearchQuery);
     const serverScores = currentTranscriptSearch?.scores;
@@ -1469,9 +1526,59 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
 
   const treesByProject = useMemo(() => {
     const m = new Map<string, SessionTreeNode[]>();
-    for (const { project, sessions, scores } of visibleProjectEntries) m.set(project.path, buildSessionTree(sessions, scores));
+    for (const { project, sessions, scores } of visibleProjectEntries) {
+      // No search → `scores` is absent and buildSessionTree would fall back to
+      // sorting by file mtime, which reshuffles rows live on every refresh.
+      // Feed it the frozen stable-order ranks so the grouped view stays as
+      // persistent as the flat Recent list (both share one snapshot).
+      const sortKey = scores ?? stableRanksFor(sessions);
+      m.set(project.path, buildSessionTree(sessions, sortKey));
+    }
     return m;
-  }, [visibleProjectEntries]);
+  }, [visibleProjectEntries, stableRanksFor]);
+
+  // Flat recent list: every visible session across workspaces, newest
+  // interaction first. Reuses the same search/running filters as the grouped
+  // view so switching modes never changes which sessions qualify.
+  const recentSessions = useMemo(() => {
+    const query = compileSearchQuery(trimmedSearchQuery);
+    const serverScores = currentTranscriptSearch?.scores;
+    // Same case-folded matching the grouped view uses (see
+    // groupSessionsByProject): Windows paths differ only in casing.
+    const knownProjects = new Set(sortedProjects.map((project) => comparableProjectPath(project.path)));
+    let list = visibleSessions.filter((session) => {
+      const key = workspaceKeyOf(session);
+      return key ? knownProjects.has(comparableProjectPath(key)) : false;
+    });
+    if (runningOnly) list = list.filter((session) => runningSessionIds.has(session.id));
+    if (query) {
+      list = list.filter((session) => {
+        const score = serverScores?.[session.id]
+          ?? scoreSearchFields([searchField(session.name ?? "", TITLE_WEIGHT), searchField(session.firstMessage, FIRST_MESSAGE_WEIGHT)], query);
+        return score !== null;
+      });
+    }
+    return applyStableOrder(list, sessionRecency, stableOrderRef.current);
+  }, [visibleSessions, sortedProjects, runningOnly, trimmedSearchQuery, currentTranscriptSearch, runningSessionIds, sessionRecency]);
+
+  // Forks still nest in the flat list, so build the same tree structure. The
+  // tree sorts by score then mtime; feed it the recency order as ranks so the
+  // "what I was just working on" order survives (higher score = earlier).
+  const recentNodes = useMemo(() => {
+    const ranks = new Map<string, number>();
+    recentSessions.forEach((session, index) => ranks.set(session.id, -index));
+    return buildSessionTree(recentSessions, ranks);
+  }, [recentSessions]);
+  const visibleRecentNodes = recentShowAll ? recentNodes : recentNodes.slice(0, MAX_RECENT_SESSIONS);
+  // Flat rows must say which workspace they belong to — the grouping that
+  // normally conveys it is gone in this view.
+  const workspaceLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const project of sortedProjects) {
+      labels.set(comparableProjectPath(project.path), project.alias ?? projectLabel(project.path));
+    }
+    return labels;
+  }, [sortedProjects]);
 
   // ---- Cross-profile aggregate (read-only, decision D-3) ---------------------
   // Buckets for every profile EXCEPT the one being viewed. Suppressed until the
@@ -1874,6 +1981,21 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
     setWtConfirmRemove(null);
   }, []);
 
+  // One shared "I just worked on this" recorder: opening a session (or having
+  // it auto-restored as the active tab) moves it to the top of the recent list.
+  // Only an id CHANGE counts: recording on every session-list refresh would
+  // keep re-stamping the active row and reorder the flat list under the user.
+  const recordedSessionIdRef = useRef<string | null>(null);
+  const markSessionInteracted = useCallback((sessionId: string) => {
+    if (recordedSessionIdRef.current === sessionId) return;
+    recordedSessionIdRef.current = sessionId;
+    setSessionRecency((prev) => {
+      const next = recordSessionInteraction(prev, sessionId);
+      writeSessionRecency(next);
+      return next;
+    });
+  }, []);
+
   // Clicking a session moves the effective cwd to that session's worktree.
   // Done on the click path (not via the selectedCwd prop sync) so it also
   // works when the prop value won't change — e.g. re-clicking the already
@@ -1881,10 +2003,11 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
   // activates and expands its containing project.
   const handleSelectSessionFromList = useCallback((s: SessionInfo) => {
     provisionalSelectionRef.current = false;
+    markSessionInteracted(s.id);
     if (s.cwd) setSelectedCwd(s.cwd);
     expandProject(workspaceKeyOf(s));
     onSelectSession(s);
-  }, [onSelectSession, expandProject]);
+  }, [onSelectSession, expandProject, markSessionInteracted]);
 
   const handleNewSession = useCallback(() => {
     if (!selectedCwd) return;
@@ -1970,9 +2093,14 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
   }, [allSessions, onSessionDeleted, loadSessions]);
 
   useEffect(() => {
+    if (!selectedSessionId) return;
     const selected = allSessions.find((session) => session.id === selectedSessionId);
     if (selected) setLastOpenSession(workspaceKeyOf(selected), selected.id);
-  }, [allSessions, selectedSessionId]);
+    // A session can become active without a sidebar click (URL restore,
+    // command palette, new-session promotion). Record it here so the flat
+    // recent list reflects what the user is actually working on.
+    markSessionInteracted(selectedSessionId);
+  }, [allSessions, selectedSessionId, markSessionInteracted]);
 
   // row. Non-Git projects intentionally render no Git affordance at all. The
   // switcher shows the ACTIVE repo's own worktrees/branches only.
@@ -2121,7 +2249,8 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
         </button>
       </div>
 
-      {/* Workspaces section header: label + search / filter / add */}
+
+      {/* Workspaces section header: label + search / filter / view / add */}
       <div style={{ flexShrink: 0, padding: "4px 10px 2px", display: "flex", alignItems: "center", gap: 2 }}>
         <span
           style={{
@@ -2131,9 +2260,13 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
             fontWeight: 600,
             letterSpacing: "0.08em",
             textTransform: "uppercase",
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
-          {t("projects.heading")}
+          {recentMode ? t("sessionSidebar.recentHeading") : t("projects.heading")}
         </span>
         <SidebarIconButton
           label={t("sessionSidebar.search")}
@@ -2147,6 +2280,18 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
           }}
         >
           <Search size={15} strokeWidth={1.9} aria-hidden="true" />
+        </SidebarIconButton>
+        <SidebarIconButton
+          label={t("sessionSidebar.recentView")}
+          title={recentMode ? t("sessionSidebar.recentViewOn") : t("sessionSidebar.recentViewOff")}
+          active={recentMode}
+          onClick={() => {
+            const next = !recentMode;
+            setRecentMode(next);
+            saveRecentMode(next);
+          }}
+        >
+          <History size={15} strokeWidth={1.9} aria-hidden="true" />
         </SidebarIconButton>
         <SidebarIconButton
           label={t("sessionSidebar.filterRunning")}
@@ -2226,13 +2371,50 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
               {t("projects.noProjects")}
             </div>
           )}
-          {!loading && !projectsError && !error && sortedProjects.length > 0 && visibleProjectEntries.length === 0 && (
+          {!loading && !projectsError && !error && sortedProjects.length > 0
+            && (recentMode ? recentNodes.length === 0 : visibleProjectEntries.length === 0) && (
             <div style={{ padding: "14px 4px", color: "var(--text-dim)", fontSize: 11.5, lineHeight: 1.5 }}>
               {t("sessionSidebar.noMatches")}
             </div>
           )}
 
-          {visibleProjectEntries.map(({ project, sessions, scores }) => {
+          {recentMode && visibleRecentNodes.map((node) => (
+            <SessionTreeItem
+              key={node.session.id}
+              node={node}
+              selectedSessionId={selectedSessionId}
+              runningSessionIds={runningSessionIds}
+              unreadSessionIds={unreadSessionIds}
+              relativeTimeNow={relativeTimeNow}
+              onSelectSession={handleSelectSessionFromList}
+              onRenamed={loadSessions}
+              onSessionDeleted={handleSessionDeleted}
+              depth={0}
+              workspaceLabel={workspaceLabels.get(comparableProjectPath(workspaceKeyOf(node.session)))}
+            />
+          ))}
+          {recentMode && recentNodes.length > MAX_RECENT_SESSIONS && (
+            <button
+              onClick={() => setRecentShowAll((v) => !v)}
+              aria-expanded={recentShowAll}
+              style={{
+                display: "flex", alignItems: "center", gap: 5, width: "100%",
+                margin: "2px 0 0", padding: "5px 8px", background: "none", border: "none",
+                color: "var(--text-dim)", cursor: "pointer", textAlign: "left",
+                fontSize: 11, fontWeight: 600, borderRadius: "var(--radius-control)",
+                transition: SIDEBAR_BUTTON_TRANSITION,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
+            >
+              <ChevronDown size={11} strokeWidth={1.8} style={{ flexShrink: 0, transform: recentShowAll ? "rotate(180deg)" : "none", transition: "transform var(--dur-fast) var(--ease-out-warm)" }} aria-hidden="true" />
+              {recentShowAll
+                ? t("projects.showLess")
+                : t("projects.showMoreSessions", { count: recentNodes.length - MAX_RECENT_SESSIONS })}
+            </button>
+          )}
+
+          {!recentMode && visibleProjectEntries.map(({ project, sessions, scores }) => {
             const tree = treesByProject.get(project.path) ?? buildSessionTree(sessions, scores);
             // Sessions group under a project through the case-folded comparable
             // form (see groupSessionsByProject), so the active highlight must
@@ -2550,6 +2732,8 @@ export function SessionSidebar({ selectedSessionId, optimisticSession, onSelectS
 }
 
 const MAX_PROJECT_SESSIONS = 5;
+/** Flat recent list cap; deeper history is one click away via show-more. */
+const MAX_RECENT_SESSIONS = 12;
 
 interface ProjectRowProps {
   project: ManagedProject;
@@ -3293,6 +3477,7 @@ const SessionTreeItem = memo(function SessionTreeItem({
   onRenamed,
   onSessionDeleted,
   depth,
+  workspaceLabel,
 }: {
   node: SessionTreeNode;
   selectedSessionId: string | null;
@@ -3303,6 +3488,7 @@ const SessionTreeItem = memo(function SessionTreeItem({
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
   depth: number;
+  workspaceLabel?: string;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const hasChildren = node.children.length > 0;
@@ -3333,7 +3519,7 @@ const SessionTreeItem = memo(function SessionTreeItem({
         {depth > 0 && (
           <div style={{
             position: "absolute",
-            left: depth * 14 + 22,
+            left: workspaceLabel ? depth * 14 + 4 : depth * 14 + 22,
             top: 0, bottom: 0,
             width: 1,
             background: "var(--border)",
@@ -3353,6 +3539,7 @@ const SessionTreeItem = memo(function SessionTreeItem({
           hasChildren={hasChildren}
           collapsed={collapsed}
           onToggleCollapse={handleToggleCollapse}
+          workspaceLabel={workspaceLabel}
         />
       </div>
       {hasChildren && !collapsed && (
@@ -3369,6 +3556,7 @@ const SessionTreeItem = memo(function SessionTreeItem({
               onRenamed={onRenamed}
               onSessionDeleted={onSessionDeleted}
               depth={depth + 1}
+              workspaceLabel={workspaceLabel}
             />
           ))}
         </div>
@@ -3392,6 +3580,7 @@ const SessionTreeItem = memo(function SessionTreeItem({
     if (prev.unreadSessionIds.has(id) !== next.unreadSessionIds.has(id)) return false;
   }
   if (prev.relativeTimeNow !== next.relativeTimeNow) return false;
+  if (prev.workspaceLabel !== next.workspaceLabel) return false;
   if (prev.onSelectSession !== next.onSelectSession
     || prev.onRenamed !== next.onRenamed
     || prev.onSessionDeleted !== next.onSessionDeleted) return false;
@@ -3467,6 +3656,7 @@ const SessionItem = memo(function SessionItem({
   collapsed = false,
   relativeTimeNow,
   onToggleCollapse,
+  workspaceLabel,
 }: {
   session: SessionInfo;
   isSelected: boolean;
@@ -3480,6 +3670,8 @@ const SessionItem = memo(function SessionItem({
   relativeTimeNow: number;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  /** Set only in the flat recent list, where a row must name its workspace. */
+  workspaceLabel?: string;
 }) {
   const { t, locale } = useI18n();
   const [hovered, setHovered] = useState(false);
@@ -3601,7 +3793,7 @@ const SessionItem = memo(function SessionItem({
         width: "100%",
         margin: "1px 0",
         borderBottom: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
-        padding: `0 8px 0 ${30 + depth * 14}px`,
+        padding: `0 8px 0 ${(workspaceLabel ? 10 : 30) + depth * 14}px`,
         position: "relative",
         overflow: "hidden",
         background: rowBackground,
@@ -3615,7 +3807,7 @@ const SessionItem = memo(function SessionItem({
           aria-hidden="true"
           style={{
             position: "absolute",
-            left: 20 + depth * 14,
+            left: (workspaceLabel ? 2 : 20) + depth * 14,
             top: 0,
             bottom: 0,
             width: 2,
@@ -3649,6 +3841,29 @@ const SessionItem = memo(function SessionItem({
               {title}
             </span>
           </button>
+          {workspaceLabel && (
+            <span
+              title={t("sessionSidebar.recentWorkspace", { workspace: workspaceLabel })}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 3,
+                flexShrink: 0,
+                maxWidth: 80,
+                minWidth: 0,
+                padding: "1px 5px",
+                borderRadius: "var(--radius-control)",
+                background: "var(--bg-subtle)",
+                border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+                color: "var(--text-dim)",
+                fontSize: 10,
+                lineHeight: 1.2,
+              }}
+            >
+              <Folder size={10} strokeWidth={2} aria-hidden="true" style={{ flexShrink: 0, opacity: 0.75 }} />
+              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{workspaceLabel}</span>
+            </span>
+          )}
           {session.worktreeBranch && <span title={t("sessionSidebar.worktreeTitle", { path: session.cwd })} style={{ display: "flex", alignItems: "center", gap: 3, maxWidth: 56, minWidth: 0, overflow: "hidden", color: "var(--text-dim)", fontSize: 10, flexShrink: 1 }}><GitBranch size={10} strokeWidth={2.4} aria-hidden="true" /><span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.worktreeBranch}</span></span>}
           {hasChildren && <button className="session-item-icon-button" onClick={(event) => { event.stopPropagation(); onToggleCollapse?.(); }} title={collapsed ? t("sessionSidebar.expandForks") : t("sessionSidebar.collapseForks")} aria-label={collapsed ? t("sessionSidebar.expandForks") : t("sessionSidebar.collapseForks")} aria-expanded={!collapsed} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, padding: 0, flexShrink: 0, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", transform: collapsed ? "rotate(-90deg)" : "none", transition: "transform var(--dur-fast) var(--ease-out-warm)" }}><ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" /></button>}
           <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>

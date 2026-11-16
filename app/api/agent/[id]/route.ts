@@ -8,6 +8,14 @@ import { MAX_AGENT_COMMAND_REQUEST_BYTES } from "@/lib/image-attachments";
 import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 import { findCliSessionLock } from "@/lib/session-cli-lock";
 
+/** Order-insensitive list comparison for spawn flags: the spawn registry and
+ *  the query string may list the same tools in a different order. */
+function sameSpawnList(current: string[] | undefined, wanted: string[]): boolean {
+  if (!current || current.length !== wanted.length) return false;
+  const set = new Set(current);
+  return wanted.every((item) => set.has(item));
+}
+
 /** omp-web's own failures carry a stable code the client can localize; omp's
  * errors stay opaque English text. */
 function commandErrorResponse(error: unknown) {
@@ -42,16 +50,29 @@ export async function POST(
 
     // The per-chat advisor choice rides on the query string (never the RPC
     // body, which is forwarded to omp verbatim) and only matters when this
-    // request spawns or replaces the session's omp process.
-    const advisor = new URL(req.url).searchParams.get("advisor") === "1";
+    // request spawns or replaces the session's omp process. Tool/skill
+    // selection needs the same treatment: a resumed session must start with
+    // the tools its own chat chose, not OMP's unrestricted default.
+    const spawnQuery = new URL(req.url).searchParams;
+    const advisor = spawnQuery.get("advisor") === "1";
+    // Absent param = "no opinion" (keep whatever the live child has); `*` =
+    // explicitly unrestricted. Splitting them matters: a request without a
+    // tools param must not look like a request to strip the child's tools.
+    const parseSpawnList = (raw: string | null): string[] | undefined =>
+      raw === null || raw === "*" ? undefined : raw === "" ? [] : raw.split(",");
+    const spawnTools = parseSpawnList(spawnQuery.get("tools"));
+    const spawnSkills = parseSpawnList(spawnQuery.get("skills"));
 
     // Fast path: already-running session. --advisor is a spawn-time flag with
     // no runtime RPC, so a toggle that now differs from the live child's spawn
     // flag must replace an idle child to take effect; busy children keep
-    // running and pick the flag up at the next natural respawn.
+    // running and pick the flag up at the next natural respawn. Tools/skills
+    // are the same kind of flag, so a mismatch replaces an idle child too.
     const existing = getRpcSession(id, ctx);
     if (existing?.isAlive()) {
-      if (existing.advisorSpawned === advisor || existing.isRunning()) {
+      const toolsMatch = spawnTools === undefined || sameSpawnList(existing.toolNames, spawnTools);
+      const skillsMatch = spawnSkills === undefined || sameSpawnList(existing.skillPatterns, spawnSkills);
+      if ((existing.advisorSpawned === advisor && toolsMatch && skillsMatch) || existing.isRunning()) {
         const result = await existing.send(body);
         return NextResponse.json({ success: true, data: result }, { headers: { ...PROFILE_SCOPED_HEADERS } });
       }
@@ -79,7 +100,7 @@ export async function POST(
     const header = readSessionHeader(filePath);
     const { cwd } = resolveSpawnCwdResult(header?.cwd);
 
-    const { session } = await startRpcSession(id, filePath, cwd, undefined, advisor, header?.cwd, ctx);
+    const { session } = await startRpcSession(id, filePath, cwd, spawnTools, advisor, header?.cwd, ctx, spawnSkills);
     const result = await session.send(body);
 
     return NextResponse.json({ success: true, data: result }, { headers: { ...PROFILE_SCOPED_HEADERS } });
@@ -102,17 +123,8 @@ export async function GET(
       return NextResponse.json({ running: false }, { headers: { ...PROFILE_SCOPED_HEADERS } });
     }
 
-    try {
-      const state = await session.send({ type: "get_state" });
-      return NextResponse.json({ running: true, state }, { headers: { ...PROFILE_SCOPED_HEADERS } });
-    } catch (error) {
-      // A wedged child is recycled by the wrapper. Treat state inspection as
-      // recoverably idle so browser reconciliation can unlock the composer.
-      if (error instanceof WebRpcError && error.code === "session_unresponsive") {
-        return NextResponse.json({ running: false, recovered: true }, { headers: { ...PROFILE_SCOPED_HEADERS } });
-      }
-      throw error;
-    }
+    const state = await session.send({ type: "get_state" });
+    return NextResponse.json({ running: session.isRunning(), state }, { headers: { ...PROFILE_SCOPED_HEADERS } });
   } catch (error) {
     return commandErrorResponse(error);
   }

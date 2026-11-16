@@ -615,6 +615,10 @@ export function CapabilitiesPicker(props: Props) {
                   )}
                 </div>
 
+                <span style={{ fontSize: 9.5, color: "var(--text-dim)", lineHeight: 1.3 }}>
+                  {t("capabilities.mcpScopeNote")}
+                </span>
+
                 {!catalog?.mcpServers || catalog.mcpServers.length === 0 ? (
                   <span style={{ fontSize: 10.5, color: "var(--text-dim)", fontStyle: "italic" }}>
                     {t("capabilities.noMcpFound")}

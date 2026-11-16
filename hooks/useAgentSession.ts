@@ -13,14 +13,14 @@ import type {
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import type { ThinkingModelMeta } from "@/lib/thinking-levels";
-import { sendAgentCommand, setSessionAdvisorSpawn } from "@/lib/agent-client";
+import { sendAgentCommand, setSessionAdvisorSpawn, setSessionCapabilitySpawn } from "@/lib/agent-client";
 import { createHttpSseClient, type OmpwebClient, type EventSubscription } from "@/lib/client";
 import { translate } from "@/lib/i18n";
 import { toast } from "@/components/ui/toast";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { createMessageUpdateCoalescer, type MessageUpdateCoalescer } from "@/lib/message-update-coalescer";
 import { getToolNamesForPreset, type ToolPreset } from "@/lib/tool-presets";
-import { getPreferredToolPreset, setPreferredToolPreset, getPreferredCapabilities, setPreferredCapabilities } from "@/lib/tool-preset-preference";
+import { getPreferredToolPreset, setPreferredToolPreset, getPreferredCapabilities, getSessionCapabilities, setSessionCapabilities } from "@/lib/tool-preset-preference";
 import { expandWebSlashCommand } from "@/lib/web-slash-commands";
 import { validateOutgoingPrompt } from "@/lib/image-attachments";
 import { createActiveGoal, parseActiveGoal, type ActiveGoal, type ActivePlan } from "@/lib/web-mode-state";
@@ -642,6 +642,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [error, setError] = useState<string | null>(null);
   const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const committedEventRevisionRef = useRef(0);
+  const streamRecoverySeqRef = useRef(0);
+  const streamRecoveryPendingRef = useRef(false);
   const [backgroundJobUpdates, setBackgroundJobUpdates] = useState<Record<string, BackgroundJobUpdate>>({});
   const [backgroundJobsConnected, setBackgroundJobsConnected] = useState(false);
   const [backgroundJobsRevision, setBackgroundJobsRevision] = useState(0);
@@ -678,9 +681,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleCapabilitiesChange = useCallback(async (newCaps: SessionCapabilities, saveToWorkspace = false) => {
     setCapabilities(newCaps);
-    // Persist the full selection (including custom tool/MCP lists), not just a
-    // coarse preset, so reopening the app restores what the user actually chose.
-    setPreferredCapabilities(newCaps);
+    // Persist per session only: tools chosen in one chat must never rewrite
+    // another chat's selection (the picker is a session-scoped control). An
+    // unsaved new chat has no id yet; ensureNewSession later reads the
+    // in-memory state, so nothing needs to be written for it here.
+    const capsSessionId = sessionIdRef.current ?? session?.id;
+    if (capsSessionId) setSessionCapabilities(capsSessionId, newCaps);
 
     const activeTools = newCaps.tools?.join(", ") ?? "all";
     const activeSkills = newCaps.skills?.join(", ") ?? "all";
@@ -708,15 +714,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }).catch(() => {});
     }
 
-    // MCP toggles are profile-level OMP settings (mcp.json `disabledServers`),
-    // so they are written on every change instead of only with "save to
-    // workspace" — otherwise the switch would be cosmetic.
-    const workspaceCwd = saveToWorkspace ? session?.cwd || newSessionCwd : null;
+    // MCP toggles are WORKSPACE-scoped: OMP has no per-session MCP switch, so
+    // the choice lands in `<project>/.omp/mcp.json`, which that project's chats
+    // share and other projects ignore. The cwd is always sent for that; the
+    // separate flag keeps `.omp/config.yml` skills writes opt-in as before.
+    const workspaceCwd = session?.cwd || newSessionCwd;
     await fetch("/api/capabilities", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...(workspaceCwd ? { cwd: workspaceCwd } : {}),
+        ...(saveToWorkspace ? { saveSkillsToWorkspace: true } : {}),
         capabilities: newCaps,
       }),
     }).catch(() => {});
@@ -938,6 +946,22 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
     return null;
   }, [todoPhases]);
+  // Tool/MCP/skill selection is per session: switching chats restores that
+  // chat's own choice. A chat with nothing stored falls back to the configured
+  // default — never to the previous session's pick, which would silently
+  // constrain this chat with unrelated tools.
+  useEffect(() => {
+    const sid = session?.id;
+    if (!sid) return;
+    setCapabilities(getSessionCapabilities(sid) ?? getPreferredCapabilities());
+  }, [session?.id]);
+
+  useEffect(() => {
+    const sid = sessionIdRef.current ?? session?.id;
+    if (!sid) return;
+    setSessionCapabilitySpawn(sid, { tools: capabilities.tools, skills: capabilities.skills });
+  }, [session?.id, capabilities.tools, capabilities.skills]);
+
   // Load the per-session advisor choice on session switch; brand-new chats
   // start disabled until the user toggles the composer icon.
   useEffect(() => {
@@ -1127,8 +1151,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
       if (!res.ok) return;
-      const agentState = await res.json() as { running: boolean; state?: AgentStateResponse };
-      if (sessionIdRef.current !== sid) return;
+      const agentState = await res.json() as { running: boolean; stale?: boolean; state?: AgentStateResponse };
+      if (sessionIdRef.current !== sid || agentState.stale) return;
       const applied = applyAuthoritativeModel(toThinkingModelMeta(agentState.state?.model), token);
       if (!applied) return; // stale snapshot — drop its thinking level too
       if (agentState.state?.thinkingLevel !== undefined) {
@@ -1151,7 +1175,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [applyAuthoritativeModel, beginAuthoritativeModelSync]);
 
-  const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, fenceRunId?: number) => {
+  const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, fenceRunId?: number, fenceEventRevision?: number) => {
     let messagesLoaded = false;
     try {
       if (showLoading) setLoading(true);
@@ -1171,6 +1195,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
       const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}?${params}`);
       if (res.status === 404) {
+        if (fenceEventRevision !== undefined) return null;
         const errData = await res.json().catch(() => null) as { code?: string; profile?: string } | null;
         if (errData?.code === "session_wrong_profile" && errData.profile) {
           setTabProfile(errData.profile);
@@ -1196,6 +1221,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // of a run that started while this fetch was in flight (it would delete
       // the new run's optimistic user bubble).
       if (fenceRunId !== undefined && promptRunIdRef.current !== fenceRunId) return null;
+      if (fenceEventRevision !== undefined && committedEventRevisionRef.current !== fenceEventRevision) return null;
       setData(d);
       setActiveLeafId(d.leafId);
       setMessages(d.context.messages);
@@ -1233,7 +1259,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const token = beginAuthoritativeModelSync();
         const stateRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
         if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
-        const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse; external?: boolean; cliLocked?: boolean; cliLockPid?: number; webActive?: boolean };
+        const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse; stale?: boolean; external?: boolean; cliLocked?: boolean; cliLockPid?: number; webActive?: boolean };
         if (sessionIdRef.current !== sid) {
           if (showLoading) setLoading(false);
           return null;
@@ -1244,8 +1270,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         const liveState = agentState.state;
-        const modelApplied = applyAuthoritativeModel(toThinkingModelMeta(liveState?.model), token);
-        if (liveState) {
+        const modelApplied = agentState.stale ? false : applyAuthoritativeModel(toThinkingModelMeta(liveState?.model), token);
+        if (liveState && !agentState.stale) {
           if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt || null);
           if (modelApplied && liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
@@ -1260,7 +1286,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
           if (liveState.todoPhases !== undefined) setTodoPhases(liveState.todoPhases ?? []);
           if (liveState.queuedMessageCount === 0 && Date.now() - queueMutatedAtRef.current >= 5000) setQueuedMessages(EMPTY_QUEUE);
-        } else if (!agentState.running && Date.now() - queueMutatedAtRef.current >= 5000) {
+        } else if (!agentState.stale && !agentState.running && Date.now() - queueMutatedAtRef.current >= 5000) {
           setQueuedMessages(EMPTY_QUEUE);
         }
 
@@ -1274,7 +1300,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           setCliLockPid(null);
           setSessionLockKind("idle");
         }
-        if (!agentState.running) {
+        if (!agentState.running && !agentState.stale) {
           agentRunningRef.current = false;
           setAgentRunning(false);
           setAgentPhase(null);
@@ -1376,6 +1402,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const result = await res.json() as { sessionId: string };
       const realId = result.sessionId;
       sessionIdRef.current = realId;
+      // The picker wrote nothing while this chat had no id; carry the chosen
+      // tools over to the real id so the selection survives a reload.
+      setSessionCapabilities(realId, capabilities);
+      setSessionCapabilitySpawn(realId, { tools: capabilities.tools, skills: capabilities.skills });
       // The toggle handler could not persist while the chat had no id; carry
       // the pre-prompt choice over so it survives a reload after this point.
       if (advisorEnabled) {
@@ -1446,8 +1476,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   useEffect(() => {
     return client.system.subscribeSessionsChanged((sessionIds) => {
       const sid = sessionIdRef.current;
-      if (!sid || eventSourceRef.current || !sessionIds.includes(sid)) return;
-      void loadSession(sid);
+      if (!sid || !sessionIds.includes(sid)) return;
+      if (!eventSourceRef.current || !eventSourceRef.current.isOpen) {
+        void loadSession(sid);
+      }
     });
   }, [client, loadSession]);
 
@@ -1484,6 +1516,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setBackgroundJobsConnected(true);
         bumpBackgroundJobsRevision();
         settle("connected");
+        // Silent background transcript resync: if the stream just connected or reconnected
+        // after a drop, sync any committed messages that landed during the gap.
+        void loadSession(sid, false, false, promptRunIdRef.current, committedEventRevisionRef.current);
       },
       onConnected: (frame) => {
         if (eventSourceRef.current !== subscription || sessionIdRef.current !== sid) return;
@@ -1494,6 +1529,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       },
       onEvent: (frame) => {
         if (eventSourceRef.current !== subscription || sessionIdRef.current !== sid) return;
+        if ((frame as AgentEvent).type === "message_end") committedEventRevisionRef.current += 1;
         eventCoalescer.push(frame as unknown as AgentEvent);
       },
       onDestroyed: (frame) => {
@@ -1960,12 +1996,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       && Date.now() - startedAt < PROMPT_SETTLE_MAX_MS
     ) {
       if (runId !== undefined && promptRunIdRef.current !== runId) return;
+      // The state route bounds the child RPC and marks fallback snapshots stale.
       try {
-        const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
         if (res.ok) {
-          const data = await res.json() as { running?: boolean; state?: AgentStateResponse };
+          const data = await res.json() as { running?: boolean; stale?: boolean; state?: AgentStateResponse };
           const state = data.state;
-          if (!data.running || !state || (!state.isStreaming && !state.isPromptRunning)) {
+          if (!data.stale && (!data.running || (state && !state.isStreaming && !state.isPromptRunning && !state.isCompacting && !state.isBashRunning))) {
             await finishPromptWithoutStream(sid, runId);
             return;
           }
@@ -1988,10 +2025,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     ) {
       await delay(BASH_STATE_RECONCILE_MS);
       try {
-        const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
+        // Bounded /state read (see waitForPromptSettlement): GET /api/agent/[id]
+        // could hang 60s per poll while the child is wedged.
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
         if (!res.ok) continue;
-        const data = await res.json() as { state?: AgentStateResponse };
-        if (data.state?.isBashRunning) continue;
+        const data = await res.json() as { running?: boolean; stale?: boolean; state?: AgentStateResponse };
+        if (data.stale || (data.running && !data.state) || data.state?.isBashRunning) continue;
 
         await loadSession(sid);
         if (bashRecoveryIdRef.current !== recoveryId || sessionIdRef.current !== sid) return;
@@ -2014,13 +2053,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!agentRunningRef.current) return;
     const runId = promptRunIdRef.current;
     try {
-      const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
+      // Bounded /state read (see waitForPromptSettlement): GET /api/agent/[id]
+      // awaits the child's get_state with a 60s timeout, so reconcile ticks
+      // can stack up while SSE is down — the exact scenario this poll exists for.
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
       if (!res.ok) return;
-      const data = await res.json() as { running?: boolean; state?: AgentStateResponse };
+      const data = await res.json() as { running?: boolean; stale?: boolean; state?: AgentStateResponse };
       // A slow response can straddle a run boundary (previous run finished
       // and the user already started the next one while this request was in
       // flight) — everything in it is stale, drop it.
       if (promptRunIdRef.current !== runId) return;
+      if (data.stale) return;
       const state = data.state;
       // Mirror compaction state unconditionally: a missed compaction_end
       // would otherwise leave the "Stop compaction" UI stuck. No state
@@ -2032,9 +2075,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // And the only reliable re-sync for a missed subagent lifecycle frame.
       void refreshSubagentRoster(sid);
       if ((!state || state.queuedMessageCount === 0) && Date.now() - queueMutatedAtRef.current >= 5000) setQueuedMessages(EMPTY_QUEUE);
-      const busy = data.running && state
-        && (state.isStreaming || state.isPromptRunning || state.isCompacting);
-      if (busy || !agentRunningRef.current) return;
+      // isBashRunning: a bash-only run streams no tokens; without it this
+      // poll would declare idle and fire a false finish mid-command.
+      const busy = data.running && (!state
+        || state.isStreaming || state.isPromptRunning || state.isCompacting || state.isBashRunning);
+      if (busy) {
+        if (eventSourceRef.current && !eventSourceRef.current.isOpen && sessionIdRef.current === sid) {
+          void connectEvents(sid);
+        }
+        return;
+      }
+      if (!agentRunningRef.current) return;
       if (state) {
         if (state.contextUsage !== undefined) setContextUsage(state.contextUsage ?? null);
         if (state.systemPrompt !== undefined) setSystemPrompt(state.systemPrompt ?? null);
@@ -2082,7 +2133,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const sid = sessionIdRef.current;
       if (!sid) return;
       let cancelled = false;
-      void fetch(`/api/agent/${encodeURIComponent(sid)}`)
+      // Bounded /state read: the idle trailing sample must not hang 60s on a
+      // wedged child (same rationale as the in-run sampler below).
+      void fetch(`/api/sessions/${encodeURIComponent(sid)}/state`)
         .then((res) => (res.ok ? res.json() : null))
         .then((data: { state?: AgentStateResponse } | null) => {
           if (cancelled) return;
@@ -2102,7 +2155,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (pollCancelled) return;
       const sid = sessionIdRef.current;
       if (!sid) return;
-      void fetch(`/api/agent/${encodeURIComponent(sid)}`)
+      // Bounded /state read (see waitForPromptSettlement): a 2–4s sampler
+      // against the 60s-timeout endpoint stacks requests on a wedged child.
+      void fetch(`/api/sessions/${encodeURIComponent(sid)}/state`)
         .then((res) => (res.ok ? res.json() : null))
         .then((data: { state?: AgentStateResponse } | null) => {
           if (pollCancelled) return;
@@ -2250,10 +2305,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         resetSubagentActivityState();
         eventCoalescerRef.current?.reset();
         dispatch({ type: "end" });
+        streamRecoveryPendingRef.current = false;
         if (endedSid) {
           void loadSession(endedSid, false, false, endedRunId);
           const endToken = beginAuthoritativeModelSync();
-          fetch(`/api/agent/${encodeURIComponent(endedSid)}`)
+          // Bounded /state read: one-shot but bounded beats a 60s hang on a
+          // wedged child; model contextUsage etc. come from the same state.
+          fetch(`/api/sessions/${encodeURIComponent(endedSid)}/state`)
             .then((r) => (r.ok ? r.json() as Promise<{ state?: AgentStateResponse }> : null))
             .then((d) => {
               if (!d?.state?.model) return;
@@ -2288,7 +2346,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // Fence with the current run id like agent_end does: the reload below
         // is async, and a prompt that starts while it is in flight must not be
         // overwritten by this finished run's snapshot.
-        void finishPromptWithoutStream(sessionIdRef.current, promptRunIdRef.current, false);
+        void finishPromptWithoutStream(sessionIdRef.current, promptRunIdRef.current, streamRecoveryPendingRef.current);
+        streamRecoveryPendingRef.current = false;
         break;
       case "prompt_error":
         {
@@ -2313,6 +2372,30 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "notice": {
         const level = event.level as string | undefined;
         const message = (event.message as string | undefined)?.trim() ?? "";
+        if (event.reason === "rpc_stream_gap") {
+          streamRecoverySeqRef.current += 1;
+          streamRecoveryPendingRef.current = true;
+        }
+        if (event.reason === "rpc_stream_restored" && sessionIdRef.current) {
+          const sid = sessionIdRef.current;
+          const runId = promptRunIdRef.current;
+          const recoveryId = ++streamRecoverySeqRef.current;
+          void (async () => {
+            for (let attempt = 0; attempt < 3; attempt++) {
+              if (sessionIdRef.current !== sid || promptRunIdRef.current !== runId || streamRecoverySeqRef.current !== recoveryId) return;
+              const revision = committedEventRevisionRef.current;
+              await loadSession(sid, false, false, runId, revision);
+              if (committedEventRevisionRef.current === revision) {
+                streamRecoveryPendingRef.current = false;
+                return;
+              }
+            }
+            if (sessionIdRef.current === sid && streamRecoverySeqRef.current === recoveryId) {
+              addNotice({ type: "warning", message: "Riwayat belum lengkap. Data akan diselaraskan kembali saat proses selesai." });
+            }
+          })();
+          void reconcileAgentState(sid);
+        }
         if (/^xd:\/\/:\s*mounted\s+mcp__/i.test(message)) {
           toast.info("MCP tools updated", message, { clamp: true });
         } else {
@@ -2343,7 +2426,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const sid = sessionIdRef.current;
         if (!sid) break;
         const token = beginAuthoritativeModelSync();
-        void fetch(`/api/agent/${encodeURIComponent(sid)}`)
+        // Bounded /state read (see terminal agent_end snapshot above).
+        void fetch(`/api/sessions/${encodeURIComponent(sid)}/state`)
           .then((r) => (r.ok ? r.json() as Promise<{ state?: AgentStateResponse }> : null))
           .then((d) => {
             if (!d?.state?.model) return;
@@ -2742,6 +2826,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // recreate the wrapper and retry this prompt once. Terminal omp
       // processes are intentionally never touched by the repair endpoint.
       const errorCode = (e as Error & { code?: string })?.code;
+      if (errorCode === "job_control_unacknowledged" && sentSessionId) {
+        addNotice({ type: "warning", message: "Respons perintah belum diterima; proses mungkin masih berjalan." });
+        void waitForPromptSettlement(sentSessionId, promptRunId);
+        return true;
+      }
       if (errorCode === "session_split" && sentSessionId) {
         try {
           const repair = await fetch("/api/omp-update", {
@@ -2827,6 +2916,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return true;
     } catch (e) {
       console.error("Failed to interrupt and reply:", e);
+      if ((e as Error & { code?: string })?.code === "job_control_unacknowledged") {
+        addNotice({ type: "warning", message: "Respons perintah belum diterima; proses mungkin masih berjalan." });
+        void waitForPromptSettlement(sid, promptRunIdRef.current);
+        return true;
+      }
       interruptReplyPendingRef.current = false;
       const optimisticKey = optimisticUserMessageKeyRef.current;
       if (optimisticKey) {
@@ -2841,7 +2935,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
       return false;
     }
-  }, [addNotice, ensureEventsConnected, refreshSubagentRoster]);
+  }, [addNotice, ensureEventsConnected, refreshSubagentRoster, waitForPromptSettlement]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;
@@ -2879,7 +2973,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         await sendAgentCommand(sid, { type: "abort_bash" });
       } catch (e) {
         console.error("Failed to abort bash:", e);
-        toast.error(translate("chatInput.abortFailed"));
+        if ((e as Error & { code?: string })?.code === "job_control_unacknowledged") {
+          addNotice({ type: "warning", message: "Status penghentian belum pasti. Periksa proses sebelum mengulang." });
+        } else {
+          toast.error(translate("chatInput.abortFailed"));
+        }
       }
       return;
     }
@@ -2888,9 +2986,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       await sendAgentCommand(sid, { type: "abort" });
     } catch (e) {
       console.error("Failed to abort:", e);
-      toast.error(translate("chatInput.abortFailed"));
+      if ((e as Error & { code?: string })?.code === "job_control_unacknowledged") {
+        addNotice({ type: "warning", message: "Status penghentian belum pasti. Periksa proses sebelum mengulang." });
+      } else {
+        toast.error(translate("chatInput.abortFailed"));
+      }
     }
-  }, []);
+  }, [addNotice]);
 
   const handleFork = useCallback(async (entryId: string) => {
     if (bashRunningRef.current) return;
@@ -3299,7 +3401,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setQueuedMessages((prev) => ({ ...prev, steering: [...prev.steering, message] }));
     } catch (e) {
       console.error("Failed to steer:", e);
-      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      addNotice((e as Error & { code?: string })?.code === "job_control_unacknowledged"
+        ? { type: "warning", message: "Status arahan belum pasti. Periksa proses sebelum mengulang." }
+        : { type: "error", message: e instanceof Error ? e.message : String(e) });
       opts.chatInputRef?.current?.insertIfEmpty(message);
     }
   }, [addNotice, opts.chatInputRef, rejectIfExternallyRunning]);
@@ -3326,7 +3430,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         : { ...prev, followUp: [...prev.followUp, message] });
     } catch (e) {
       console.error("Failed to queue prompt:", e);
-      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      addNotice((e as Error & { code?: string })?.code === "job_control_unacknowledged"
+        ? { type: "warning", message: "Status pesan belum pasti. Periksa proses sebelum mengulang." }
+        : { type: "error", message: e instanceof Error ? e.message : String(e) });
       opts.chatInputRef?.current?.insertIfEmpty(message);
     }
   }, [addNotice, opts.chatInputRef, rejectIfExternallyRunning]);
@@ -3346,7 +3452,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setQueuedMessages((prev) => ({ ...prev, followUp: [...prev.followUp, message] }));
     } catch (e) {
       console.error("Failed to follow up:", e);
-      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      addNotice((e as Error & { code?: string })?.code === "job_control_unacknowledged"
+        ? { type: "warning", message: "Status pesan belum pasti. Periksa proses sebelum mengulang." }
+        : { type: "error", message: e instanceof Error ? e.message : String(e) });
       opts.chatInputRef?.current?.insertIfEmpty(message);
     }
   }, [addNotice, opts.chatInputRef, rejectIfExternallyRunning]);
@@ -3358,9 +3466,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       await sendAgentCommand(sid, { type: "abort_compaction" });
     } catch (e) {
       console.error("Failed to abort compaction:", e);
-      toast.error(translate("chatInput.abortFailed"));
+      if ((e as Error & { code?: string })?.code === "job_control_unacknowledged") {
+        addNotice({ type: "warning", message: "Status penghentian belum pasti. Periksa proses sebelum mengulang." });
+      } else {
+        toast.error(translate("chatInput.abortFailed"));
+      }
     }
-  }, []);
+  }, [addNotice]);
 
   const handleThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
     if (rejectIfExternallyRunning()) return;
@@ -3434,6 +3546,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // Load session on mount
   useEffect(() => {
     if (session) {
+      if (sessionIdRef.current !== session.id) {
+        streamRecoverySeqRef.current += 1;
+        streamRecoveryPendingRef.current = false;
+      }
       sessionIdRef.current = session.id;
       loadSession(session.id, true, true).then((agentState) => {
         if (sessionIdRef.current === session.id && agentState?.webActive && !agentState.external) {
@@ -3443,14 +3559,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             if (jobs.length && sessionIdRef.current === session.id && !eventSourceRef.current) void connectEvents(session.id);
           }).catch(() => {});
         }
-        if (agentState?.running) {
-          if (agentState.state?.isStreaming || agentState.state?.isPromptRunning) {
+        if (agentState?.running || (agentState?.stale && agentState.webActive)) {
+          if (agentState.state?.isStreaming || agentState.state?.isPromptRunning || agentState.stale) {
             agentRunningRef.current = true;
             setAgentRunning(true);
-            setAgentPhase(agentState.state.isStreaming ? { kind: "waiting_model" } : { kind: "running_command" });
+            setAgentPhase(agentState.state?.isStreaming ? { kind: "waiting_model" } : { kind: "running_command" });
             dispatch({ type: "start" });
-            // Register the host-tool + URI bridges so the agent can call
-            // open_url/notify/open_file and resolve pi-web://clipboard.
+            if (agentState.stale) {
+              addNotice({ type: "warning", message: "Status proses belum dapat dipastikan." });
+            }
             void registerHostTools(session.id);
             void registerHostUriSchemes(session.id);
           } else if (agentState.external) {
@@ -3527,12 +3644,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             setBashRunning(true);
             void waitForBashSettlement(session.id);
           }
-        } else {
+        } else if (!agentState?.stale) {
           agentRunningRef.current = false;
           setAgentRunning(false);
           setAgentPhase(null);
         }
-        if (agentState?.state) {
+        if (agentState?.state && !agentState.stale) {
           // Model + thinking level are owned by loadSession (token-guarded);
           // re-applying this same snapshot here would mint a fresh token and
           // bypass the stale-response guard.

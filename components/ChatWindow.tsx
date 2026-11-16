@@ -1,6 +1,6 @@
 "use client";
 import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, CustomMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
 import { translate, useI18n } from "@/lib/i18n";
@@ -74,6 +74,11 @@ function phaseLabel(phase: AgentPhase): string {
   return translate("chatWindow.thinking");
 }
 
+// A live turn with one user prompt can grow to dozens of committed messages
+// plus tool calls; past this many messages the flat live render (which mounts
+// the entire turn and cannot be windowed) costs more than folding it.
+const LIVE_TAIL_FLAT_MAX_MESSAGES = 12;
+
 // Trigger the next history page while the sentinel is still this far below
 // the top edge, so a normal upward scroll seamlessly continues into the newly
 // loaded messages. Triggering only at the very top made the load invisible:
@@ -139,14 +144,285 @@ function withAssistantBlocks(
   return next;
 }
 
-function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messageCount: number; toolCallCount: number; children: ReactNode }) {
+const PROCESS_WINDOW_THRESHOLD = 12;
+const PROCESS_OVERSCAN = 4;
+const DEFAULT_PROCESS_ITEM_HEIGHT = 68;
+
+export function estimateProcessItemHeight(msg?: AgentMessage): number {
+  if (!msg) return DEFAULT_PROCESS_ITEM_HEIGHT;
+  let textChars = 0;
+  let toolCalls = 0;
+  if ("content" in msg) {
+    const content: unknown = msg.content;
+    if (typeof content === "string") {
+      textChars = content.length;
+    } else if (Array.isArray(content)) {
+      for (const b of content) {
+        if (b && typeof b === "object" && "type" in b) {
+          if (b.type === "text" && "text" in b && typeof b.text === "string") textChars += b.text.length;
+          else if (b.type === "toolCall") toolCalls += 1;
+        }
+      }
+    }
+  }
+  const est = 44 + toolCalls * 68 + Math.min(250, (textChars / 55) * 18);
+  return Math.max(44, Math.min(600, est));
+}
+
+export interface ProcessItemDescriptor {
+  key: string;
+  render: () => ReactNode;
+  toolCallIds?: string[];
+  initialHeight?: number;
+}
+
+export interface ProcessDetailsGroupProps {
+  messageCount: number;
+  toolCallCount: number;
+  children?: ReactNode;
+  items?: ProcessItemDescriptor[];
+  targetToolCallId?: string | null;
+  onLayoutChange?: () => void;
+}
+
+export function ProcessDetailsGroup({
+  messageCount,
+  toolCallCount,
+  children,
+  items,
+  targetToolCallId,
+  onLayoutChange,
+}: ProcessDetailsGroupProps) {
   const { t, tn } = useI18n();
   const [expanded, setExpanded] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const parts = [t("chatWindow.processDetails"), tn("chatWindow.messageCount", messageCount)];
   if (toolCallCount > 0) parts.push(tn("chatWindow.toolCallCount", toolCallCount));
 
+  const actualItems = useMemo<ProcessItemDescriptor[]>(() => {
+    if (items && items.length > 0) return items;
+    if (!children) return [];
+    const childArray = Children.toArray(children);
+    return childArray.map((child, idx) => {
+      let key = `pitem-${idx}`;
+      if (child && typeof child === "object" && "key" in child && typeof child.key === "string" && child.key) {
+        key = child.key;
+      }
+      return {
+        key,
+        render: () => child,
+      };
+    });
+  }, [items, children]);
+
+  useEffect(() => {
+    if (targetToolCallId && actualItems.some((it) => it.toolCallIds?.includes(targetToolCallId))) {
+      setExpanded(true);
+    }
+  }, [targetToolCallId, actualItems]);
+
+  const [scrollPos, setScrollPos] = useState({ scrollTop: 0, viewportHeight: 800 });
+  const [cacheRevision, setCacheRevision] = useState(0);
+
+  const onLayoutChangeRef = useRef(onLayoutChange);
+  onLayoutChangeRef.current = onLayoutChange;
+
+  const syntheticGroups = useMemo<ChatGroup[]>(
+    () => actualItems.map((_, i) => ({
+      startIdx: i,
+      endIdx: i + 1,
+      userIdx: i,
+      finalAssistantIdx: -1,
+      processIndices: [],
+      tailIndices: [],
+    })),
+    [actualItems.length],
+  );
+
+  const estimator = useCallback(
+    (g: ChatGroup) => actualItems[g.startIdx]?.initialHeight ?? DEFAULT_PROCESS_ITEM_HEIGHT,
+    [actualItems],
+  );
+
+  const cacheRef = useRef<GroupHeightCache | null>(null);
+  const measuredHeightsMapRef = useRef<Map<number, number>>(new Map());
+
+  if (!cacheRef.current || cacheRef.current.count !== actualItems.length) {
+    const nextCache = new GroupHeightCache(syntheticGroups, actualItems, estimator);
+    if (measuredHeightsMapRef.current.size > 0) {
+      nextCache.seedMeasured(measuredHeightsMapRef.current);
+    }
+    cacheRef.current = nextCache;
+  }
+
+  const measuredNodesRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  const itemCallbacksRef = useRef<Map<number, (el: HTMLDivElement | null) => void>>(new Map());
+  const itemRoRef = useRef<ResizeObserver | null>(null);
+
+  const handleItemResize = useCallback((entries: ResizeObserverEntry[]) => {
+    const container = rootRef.current?.closest<HTMLDivElement>(".chat-scroll-container");
+    const cache = cacheRef.current;
+    if (!cache) return;
+    let changed = false;
+    let anchorDelta = 0;
+    const currentScrollTop = container ? container.scrollTop : 0;
+    const rootTopInContent = (container && rootRef.current)
+      ? currentScrollTop + (rootRef.current.getBoundingClientRect().top - container.getBoundingClientRect().top)
+      : 0;
+    const localScrollTop = Math.max(0, currentScrollTop - rootTopInContent);
+
+    for (const entry of entries) {
+      const target = entry.target as HTMLElement;
+      const idxStr = target.getAttribute("data-pitem");
+      if (idxStr == null) continue;
+      const idx = parseInt(idxStr, 10);
+      let height = 0;
+      if (entry.borderBoxSize && entry.borderBoxSize.length > 0) {
+        height = entry.borderBoxSize[0].blockSize;
+      } else {
+        height = target.offsetHeight;
+      }
+      if (height <= 0) continue;
+      const oldHeight = cache.height(idx);
+      const delta = cache.measure(idx, height);
+      if (delta !== 0) {
+        measuredHeightsMapRef.current.set(idx, height);
+        changed = true;
+        const itemTop = cache.offsetOf(idx);
+        if (itemTop + oldHeight <= localScrollTop) {
+          anchorDelta += delta;
+        }
+      }
+    }
+    if (anchorDelta !== 0 && container) {
+      container.scrollTop += anchorDelta;
+    }
+    if (changed) {
+      setCacheRevision((v) => v + 1);
+      onLayoutChangeRef.current?.();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!expanded || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(handleItemResize);
+    itemRoRef.current = ro;
+    for (const [, el] of measuredNodesRef.current) {
+      if (el.isConnected) {
+        ro.observe(el);
+      }
+    }
+    return () => {
+      ro.disconnect();
+      itemRoRef.current = null;
+    };
+  }, [expanded, handleItemResize]);
+
+  const attachItemRef = useCallback((idx: number) => {
+    const cached = itemCallbacksRef.current.get(idx);
+    if (cached) return cached;
+    const callback = (el: HTMLDivElement | null) => {
+      const previous = measuredNodesRef.current.get(idx);
+      if (previous === el) return;
+      if (previous) {
+        itemRoRef.current?.unobserve(previous);
+      }
+      if (!el) {
+        measuredNodesRef.current.delete(idx);
+        return;
+      }
+      measuredNodesRef.current.set(idx, el);
+      itemRoRef.current?.observe(el);
+      const height = el.offsetHeight;
+      if (height > 0 && cacheRef.current) {
+        const delta = cacheRef.current.measure(idx, height);
+        if (delta !== 0) {
+          measuredHeightsMapRef.current.set(idx, height);
+          setCacheRevision((v) => v + 1);
+          onLayoutChangeRef.current?.();
+        }
+      }
+    };
+    itemCallbacksRef.current.set(idx, callback);
+    return callback;
+  }, []);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const root = rootRef.current;
+    if (!root) return;
+    const container = root.closest<HTMLDivElement>(".chat-scroll-container");
+    if (!container) return;
+
+    let rafId: number | null = null;
+    const updateScroll = () => {
+      rafId = null;
+      if (!rootRef.current) return;
+      const cRect = container.getBoundingClientRect();
+      const rRect = rootRef.current.getBoundingClientRect();
+      const rootTopInContent = container.scrollTop + (rRect.top - cRect.top);
+      const localScrollTop = Math.max(0, container.scrollTop - rootTopInContent);
+      setScrollPos({
+        scrollTop: localScrollTop,
+        viewportHeight: container.clientHeight || 800,
+      });
+    };
+
+    updateScroll();
+
+    const onScroll = () => {
+      if (rafId !== null) return;
+      rafId = typeof requestAnimationFrame === "function"
+        ? requestAnimationFrame(updateScroll)
+        : (setTimeout(updateScroll, 16) as unknown as number);
+    };
+
+    container.addEventListener("scroll", onScroll, { passive: true });
+    if (typeof window !== "undefined") {
+      window.addEventListener("resize", onScroll, { passive: true });
+    }
+    return () => {
+      if (rafId !== null) {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
+        else clearTimeout(rafId);
+      }
+      container.removeEventListener("scroll", onScroll);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("resize", onScroll);
+      }
+    };
+  }, [expanded]);
+
+  const win = useMemo(() => {
+    if (!cacheRef.current) {
+      return { startGroup: 0, endGroup: actualItems.length, topPad: 0, bottomPad: 0 };
+    }
+    let computed = computeWindow(
+      cacheRef.current,
+      scrollPos.scrollTop,
+      scrollPos.viewportHeight,
+      PROCESS_OVERSCAN,
+    );
+    if (targetToolCallId) {
+      const targetIdx = actualItems.findIndex((it) => it.toolCallIds?.includes(targetToolCallId));
+      if (targetIdx >= 0) {
+        if (targetIdx < computed.startGroup || targetIdx >= computed.endGroup) {
+          const targetStart = Math.max(0, targetIdx - PROCESS_OVERSCAN);
+          const targetEnd = Math.min(actualItems.length, targetIdx + 1 + PROCESS_OVERSCAN);
+          computed = {
+            startGroup: targetStart,
+            endGroup: targetEnd,
+            topPad: cacheRef.current.offsetOf(targetStart),
+            bottomPad: Math.max(0, cacheRef.current.totalHeight - cacheRef.current.offsetOf(targetEnd)),
+          };
+        }
+      }
+    }
+    return computed;
+  }, [actualItems, scrollPos.scrollTop, scrollPos.viewportHeight, cacheRevision, targetToolCallId]);
+
   return (
-    <div style={{ marginBottom: 4 }}>
+    <div ref={rootRef} style={{ marginBottom: 4 }}>
       <button
         type="button"
         aria-expanded={expanded}
@@ -170,7 +446,24 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
       </button>
       {expanded && (
         <div style={{ marginTop: 3 }}>
-          {children}
+          {actualItems.length <= PROCESS_WINDOW_THRESHOLD ? (
+            actualItems.map((item) => (
+              <div key={item.key}>{item.render()}</div>
+            ))
+          ) : (
+            <>
+              <div aria-hidden style={{ height: win.topPad }} />
+              {actualItems.slice(win.startGroup, win.endGroup).map((item, relIdx) => {
+                const absIdx = win.startGroup + relIdx;
+                return (
+                  <div key={item.key} data-pitem={absIdx} ref={attachItemRef(absIdx)}>
+                    {item.render()}
+                  </div>
+                );
+              })}
+              <div aria-hidden style={{ height: win.bottomPad }} />
+            </>
+          )}
         </div>
       )}
     </div>
@@ -204,6 +497,7 @@ interface CommittedTranscriptProps {
   window: VirtualWindow;
   /** Fired when measured group heights change the layout (window re-derive). */
   onLayoutChanged?: () => void;
+  pendingToolCallId?: string | null;
 }
 
 /**
@@ -215,7 +509,7 @@ interface CommittedTranscriptProps {
 const CommittedTranscript = memo(function CommittedTranscript({
   messages, entryIds, conversationMeta, messageRefs, isStreaming, sessionBusy, isNew, forkingEntryId,
   handleFork, handleNavigate, handleEditContent, handleMentionSelectedText, modelNames, messageCwd, onOpenFile, sessionId,
-  toolCallsDefaultCollapsed, thinkingDisplayMode, groups, layout, window: win, onLayoutChanged,
+  toolCallsDefaultCollapsed, thinkingDisplayMode, groups, layout, window: win, onLayoutChanged, pendingToolCallId,
 }: CommittedTranscriptProps) {
   const { toolResultsMap, lastAnchorIdx, visibleRefIndexByMessage } = conversationMeta;
 
@@ -424,8 +718,17 @@ const CommittedTranscript = memo(function CommittedTranscript({
   // --- 组渲染计划（T2.1：只为窗口内组构造 JSX）---
   const renderGroup = (group: ChatGroup): ReactNode => {
     const { userIdx, finalAssistantIdx, processIndices, tailIndices, endIdx } = group;
-    const isLiveTail = (sessionBusy || isStreaming) && endIdx === messages.length && userIdx === lastAnchorIdx;
-    if (finalAssistantIdx === -1 || isLiveTail) {
+    // One user prompt can span an entire long agent run (dozens of messages +
+    // tool calls). Flat-rendering that live tail mounts every committed
+    // message and re-renders the whole turn per token batch, and as a single
+    // group the virtual window cannot recycle any of it. Keep the flat branch
+    // only while the turn is small; beyond that fold it like a finished turn
+    // — the streaming bubble carries the live output either way.
+    const flatLiveTail = (sessionBusy || isStreaming)
+      && endIdx === messages.length
+      && userIdx === lastAnchorIdx
+      && endIdx - userIdx <= LIVE_TAIL_FLAT_MAX_MESSAGES;
+    if (finalAssistantIdx === -1 || flatLiveTail) {
       return (
         <Fragment key={"g-" + userIdx}>
           {[userIdx, ...processIndices, ...tailIndices].map((i) => renderMessage(i))}
@@ -452,18 +755,51 @@ const CommittedTranscript = memo(function CommittedTranscript({
         .map((i) => visibleRefIndexByMessage.get(i))
         .find((value): value is number => typeof value === "number")
         ?? (finalAnswerMessage ? undefined : visibleRefIndexByMessage.get(finalAssistantIdx));
+      const processItems: ProcessItemDescriptor[] = [];
+      for (const i of visibleProcessIndices) {
+        const msg = messages[i];
+        const toolCallIds: string[] = [];
+        if (msg.role === "assistant" && Array.isArray(msg.content)) {
+          for (const b of msg.content) {
+            if (b && typeof b === "object" && "type" in b && b.type === "toolCall" && "toolCallId" in b && typeof b.toolCallId === "string") {
+              toolCallIds.push(b.toolCallId);
+            }
+          }
+        }
+        processItems.push({
+          key: `process-${i}`,
+          render: () => renderMessage(i, { attachRef: false, keyPrefix: "process" }),
+          toolCallIds: toolCallIds.length > 0 ? toolCallIds : undefined,
+          initialHeight: estimateProcessItemHeight(msg),
+        });
+      }
+      if (finalProcessMessage) {
+        const toolCallIds: string[] = [];
+        for (const b of finalSplit.processBlocks) {
+          if (b && typeof b === "object" && "type" in b && b.type === "toolCall" && "toolCallId" in b && typeof b.toolCallId === "string") {
+            toolCallIds.push(b.toolCallId);
+          }
+        }
+        processItems.push({
+          key: `process-final-${finalAssistantIdx}`,
+          render: () => renderMessage(finalAssistantIdx, { attachRef: false, keyPrefix: "process-final", messageOverride: finalProcessMessage, showTimestamp: false }),
+          toolCallIds: toolCallIds.length > 0 ? toolCallIds : undefined,
+          initialHeight: estimateProcessItemHeight(finalProcessMessage),
+        });
+      }
+
       nodes.push(
         <div
-          key={"process-group-" + userIdx + "-" + finalAssistantIdx}
+          key={"process-group-" + userIdx}
           ref={processRefIdx === undefined ? undefined : (el) => { messageRefs.current[processRefIdx] = el; }}
         >
           <ProcessDetailsGroup
             messageCount={processCount}
             toolCallCount={countToolCalls(messages, visibleProcessIndices) + countToolCallBlocks(finalSplit.processBlocks)}
-          >
-            {visibleProcessIndices.map((i) => renderMessage(i, { attachRef: false, keyPrefix: "process" }))}
-            {finalProcessMessage && renderMessage(finalAssistantIdx, { attachRef: false, keyPrefix: "process-final", messageOverride: finalProcessMessage, showTimestamp: false })}
-          </ProcessDetailsGroup>
+            items={processItems}
+            targetToolCallId={pendingToolCallId}
+            onLayoutChange={onLayoutChanged}
+          />
         </div>,
       );
     }
@@ -665,7 +1001,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
   // --- 虚拟化（doc 14 T2.1/T2.2）---
   // 消息全量在内存（session-reader 全量解析）；组索引只依赖消息结构，
   // 流式 token 帧（length/id 不变）复用缓存，不重建。
-  const groupsKey = messages.length + ":" + (messages.length > 0 ? String((messages[messages.length - 1] as { id?: unknown }).id ?? "") : "");
+  const groupsKey = messages.length + ":" + (entryIds.length > 0 ? (entryIds[entryIds.length - 1] ?? "") : "");
   const groupsRef = useRef<{ key: string; groups: ChatGroup[] } | null>(null);
   const groups = useMemo(() => {
     if (groupsRef.current?.key === groupsKey) return groupsRef.current.groups;
@@ -676,32 +1012,33 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
   // 重建时把旧缓存中已实测的高度按锚点 id（user/compaction 消息）播种到
   // 新缓存：会话内流式增长/工具结果提交不再把全部高度打回估算，节点与
   // 滚动位置不跳变。会话切换因锚点 id 不同天然不播种。
-  const layoutRef = useRef<{ key: string; layout: GroupHeightCache; groups: ChatGroup[]; messages: AgentMessage[] } | null>(null);
+  const layoutRef = useRef<{ key: string; layout: GroupHeightCache; groups: ChatGroup[]; messages: AgentMessage[]; entryIds: string[] } | null>(null);
   const layout = useMemo(() => {
     if (layoutRef.current?.key === groupsKey) return layoutRef.current.layout;
     const built = new GroupHeightCache(groups, messages, estimateGroupHeight);
     const prev = layoutRef.current;
     if (prev) {
       // 旧缓存实测高度 → 锚点 id 索引（只保留 isMeasured 的真实值）。
+      // 消息 id 来自 entryIds（AgentMessage 本身没有 id 字段）。
       const measuredByAnchor = new Map<string, number>();
       for (let g = 0; g < prev.groups.length; g++) {
         if (!prev.layout.isMeasured(g)) continue;
-        const anchor = String((prev.messages[prev.groups[g].userIdx] as { id?: unknown } | undefined)?.id ?? "");
+        const anchor = prev.entryIds[prev.groups[g].userIdx] ?? "";
         if (anchor !== "") measuredByAnchor.set(anchor, prev.layout.height(g));
       }
       if (measuredByAnchor.size > 0) {
         const seed = new Map<number, number>();
         for (let g = 0; g < groups.length; g++) {
-          const anchor = String((messages[groups[g].userIdx] as { id?: unknown } | undefined)?.id ?? "");
+          const anchor = entryIds[groups[g].userIdx] ?? "";
           const h = anchor !== "" ? measuredByAnchor.get(anchor) : undefined;
           if (h !== undefined) seed.set(g, h);
         }
         built.seedMeasured(seed);
       }
     }
-    layoutRef.current = { key: groupsKey, layout: built, groups, messages };
+    layoutRef.current = { key: groupsKey, layout: built, groups, messages, entryIds };
     return built;
-  }, [groups, messages, groupsKey]);
+  }, [groups, messages, groupsKey, entryIds]);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   // Measured heights shift which group sits at any scroll offset; the window
@@ -709,7 +1046,14 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
   // would not re-render React, so this is state).
   const [layoutRevision, setLayoutRevision] = useState(0);
   // 滚动位置 → 可见组窗口（O(log n) 二分；双向回收由窗口移动自然完成）。
-  const win = useMemo(() => computeWindow(layout, scrollTop, viewportHeight, VIRTUAL_OVERSCAN), [layout, layoutRevision, scrollTop, viewportHeight]);
+  // 当折叠元素（tool call、thinking、ProcessDetails）展开触发 layoutRevision 时，
+  // 优先取 scrollContainer 当前真实 DOM 滚动位置，防止 state 滞后为 0 把窗口算回第一组。
+  const liveScrollTop = scrollContainerRef.current?.scrollTop ?? scrollTop;
+  const liveViewportHeight = scrollContainerRef.current?.clientHeight || viewportHeight;
+  const win = useMemo(
+    () => computeWindow(layout, liveScrollTop, liveViewportHeight, VIRTUAL_OVERSCAN),
+    [layout, layoutRevision, liveScrollTop, liveViewportHeight],
+  );
   const scrollRafRef = useRef<number | null>(null);
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -1339,7 +1683,15 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
               groups={groups}
               layout={layout}
               window={win}
-              onLayoutChanged={() => setLayoutRevision((v) => v + 1)}
+              pendingToolCallId={pendingToolCall?.id}
+              onLayoutChanged={() => {
+                const el = scrollContainerRef.current;
+                if (el) {
+                  setScrollTop(el.scrollTop);
+                  setViewportHeight(el.clientHeight);
+                }
+                setLayoutRevision((v) => v + 1);
+              }}
             />
             {streamState.isStreaming && streamState.streamingMessage && (
               <MessageView

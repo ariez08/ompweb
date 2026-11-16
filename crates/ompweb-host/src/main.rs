@@ -647,25 +647,52 @@ fn main() {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let rx = match supervisor.subscribe(&session_id) {
-                                Ok(rx) => rx,
+                            // Frames the client already delivered live before a
+                            // previous attach stream was dropped (channel
+                            // overflow): replay must not duplicate them.
+                            let since_seq = params
+                                .get(&["sinceSeq"])
+                                .and_then(|v| match v {
+                                    crate::mini_json::JsonValue::Num(n)
+                                        if n.is_finite() && *n >= 0.0 => Some(*n as u64),
+                                    crate::mini_json::JsonValue::Str(s) => s.parse::<u64>().ok(),
+                                    _ => None,
+                                })
+                                .unwrap_or(0);
+                            let (rx, replay, has_gap) = match supervisor.subscribe_from(&session_id, since_seq)
+                            {
+                                Ok(parts) => parts,
                                 Err(err) => {
                                     return Err(ipc_server::IpcError::new("no_such_session", err))
                                 }
                             };
-                            // Replay frames emitted before this subscriber attached
-                            // (fast omp startup may have already produced ready/init
-                            // frames — an attach that misses them would hang).
-                            for frame in supervisor.recent_frames(&session_id) {
-                                emit(&format!("{{\"type\":\"frame\",\"frame\":{}}}", frame));
+                            if has_gap {
+                                // The previous subscriber was dropped mid-stream
+                                // (full channel): frames were lost. Tell the
+                                // client up front instead of silently resuming.
+                                emit("{\"type\":\"rpc_stream_gap\"}");
                             }
+                            // Replay frames emitted before this subscriber
+                            // attached (fast omp startup may have already
+                            // produced ready/init frames — an attach that misses
+                            // them would hang). Each carries its session seq so
+                            // the client can drop frames it already delivered.
+                            for (seq, frame) in replay {
+                                emit(&format!(
+                                    "{{\"type\":\"frame\",\"seq\":{},\"frame\":{}}}",
+                                    seq, frame
+                                ));
+                            }
+                            // The attach subscription is now registered: any
+                            // frame broadcast from here on reaches this stream.
+                            emit("{\"type\":\"attach_confirmed\"}");
                             // Streaming: block this request, emitting child frames.
                             for event in rx.iter() {
                                 match event {
-                                    supervisor::SessionEvent::Frame(frame) => {
+                                    supervisor::SessionEvent::Frame { seq, frame } => {
                                         emit(&format!(
-                                            "{{\"type\":\"frame\",\"frame\":{}}}",
-                                            frame
+                                            "{{\"type\":\"frame\",\"seq\":{},\"frame\":{}}}",
+                                            seq, frame
                                         ));
                                     }
                                     supervisor::SessionEvent::Exited { code, signal } => {
@@ -681,6 +708,10 @@ fn main() {
                                     }
                                 }
                             }
+                            // The receiver ended without an exit event: the
+                            // supervisor dropped this subscriber (full
+                            // channel) — the client must close and reattach.
+                            emit("{\"type\":\"stream_dropped\"}");
                             Ok(Some("null".into()))
                         }
                         _ => Err(ipc_server::IpcError::new(

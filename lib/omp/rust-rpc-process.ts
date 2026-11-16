@@ -16,10 +16,11 @@
 import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { DEFAULT_PROFILE, defaultProfileContext, hostEnvFor, resolveProfileContext, type ProfileContext } from "./profile-context";
 import { normalizeProfileName } from "./paths";
 import { assertHostAvailable, resolveHostBin, resolveModuleDir } from "./host-bin";
-import { RpcFrameDecoder, type RpcFrameRecord, type RpcProtocolVersion } from "./rpc-frame";
+import { type RpcFrameRecord, type RpcProtocolVersion } from "./rpc-frame";
 import { RpcCommandError, RpcCommandTimeoutError } from "./rpc-process";
 import type { RpcProcessOptions } from "./rpc-process";
 /**
@@ -480,27 +481,36 @@ export class RustHostManager {
 
   /** Open a dedicated attach socket for one session; returns detach + a
    *  close promise that resolves when the supervisor ends the session (i.e.
-   *  the omp child has actually exited). */
-  attach(sessionId: string, onFrame: (frame: RpcFrameRecord) => void): Promise<{ detach: () => void; closed: Promise<void> }> {
+   *  the omp child has actually exited), plus a promise that resolves once
+   *  the server has registered the subscription (attach_confirmed) — only
+   *  then may rpc_stream_restored be delivered to wrapper listeners.
+   *  `sinceSeq` filters server-side replay to frames the client has not
+   *  already delivered (reattach dedupe); 0 = replay everything. */
+  attach(
+    sessionId: string,
+    onFrame: (frame: RpcFrameRecord) => void,
+    options: { sinceSeq?: number; onGap?: () => void } = {},
+  ): Promise<{ detach: () => void; closed: Promise<void>; confirmed: Promise<void> }> {
     return (async () => {
       await this.ensure();
       const socket = createConnection({ host: "127.0.0.1", port: this.port });
       let buffer = "";
-      const decoder = new RpcFrameDecoder();
+      const decoder = new StringDecoder("utf8");
       await new Promise<void>((resolve, reject) => {
         socket.once("connect", () => resolve());
         socket.once("error", reject);
       });
       socket.write(JSON.stringify({ id: "attach-hello", method: "hello", params: { token: this.token } }) + "\n");
-      socket.write(JSON.stringify({ id: "attach", method: "agent.attach", params: { sessionId } }) + "\n");
+      socket.write(JSON.stringify({ id: "attach", method: "agent.attach", params: { sessionId, sinceSeq: options.sinceSeq ?? 0 } }) + "\n");
+      const { promise: confirmed, resolve: confirmResolve } = Promise.withResolvers<void>();
       socket.on("data", (chunk: Buffer) => {
-        buffer += chunk.toString();
+        buffer += decoder.write(chunk);
         let idx: number;
         while ((idx = buffer.indexOf("\n")) >= 0) {
           const line = buffer.slice(0, idx).trim();
           buffer = buffer.slice(idx + 1);
           if (!line) continue;
-          let msg: { event?: { type: string; frame?: unknown } };
+          let msg: { event?: { type: string; frame?: unknown; seq?: unknown } };
           try {
             msg = JSON.parse(line);
           } catch {
@@ -508,17 +518,32 @@ export class RustHostManager {
           }
           const event = msg.event;
           if (!event) continue;
+          if (event.type === "rpc_stream_gap") {
+            options.onGap?.();
+            continue;
+          }
+          if (event.type === "attach_confirmed") {
+            confirmResolve();
+            continue;
+          }
           if (event.type === "frame" && event.frame && typeof event.frame === "object") {
             // The Rust supervisor nests the raw frame JSON directly, so the
-            // event.frame is already a parsed object (not a string).
-            onFrame(event.frame as RpcFrameRecord);
-          } else if (event.type === "exit") {
+            // event.frame is already a parsed object (not a string). The
+            // seq travels alongside for client-side dedupe bookkeeping.
+            const frame = event.frame as RpcFrameRecord;
+            if (typeof event.seq === "number" && frame.seq === undefined) {
+              (frame as SequencedFrame).seq = event.seq;
+            }
+            onFrame(frame);
+          } else if (event.type === "exit" || event.type === "stream_dropped") {
+            // exit: session over. stream_dropped: supervisor dropped this
+            // subscriber (full channel) — close so the caller reattaches.
             socket.destroy();
           }
         }
       });
-      const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
-      return { detach: () => socket.destroy(), closed };
+      const closed = new Promise<void>((resolve) => socket.once("close", () => { confirmResolve(); resolve(); }));
+      return { detach: () => socket.destroy(), closed, confirmed };
     })();
   }
 
@@ -614,6 +639,21 @@ export async function disposeHostFor(keyOrCtx: string | ProfileContext): Promise
 }
 
 export const hostManager = hostFor("default");
+/** Contract of RustHostManager.attach: a live frame stream plus its
+ *  lifecycle promises. */
+export interface AttachStream {
+  detach: () => void;
+  closed: Promise<void>;
+  confirmed: Promise<void>;
+}
+
+/** Frame record carrying the session-scoped sequence assigned by the Rust
+ *  supervisor for replay dedupe. */
+export interface SequencedFrame extends RpcFrameRecord {
+  seq?: number;
+}
+
+
 export class RustRpcProcess {
   readonly cwd: string;
   readonly sessionId: string;
@@ -637,6 +677,18 @@ export class RustRpcProcess {
   private readyTimer: ReturnType<typeof setTimeout> | null = null;
   private readyReject: ((reason?: unknown) => void) | null = null;
   private readyListener: RpcFrameHandler | null = null;
+  /// Highest session frame seq delivered to listeners (replay dedupe).
+  private lastSeqDelivered = 0;
+  /// A stream gap was signaled to listeners on the current connection and
+  /// no fresh subscription has confirmed recovery yet.
+  private gapSignaled = false;
+  /// The current attach stream ended without a session exit (channel
+  /// overflow drop): frames were lost and the next confirmed attach must
+  /// deliver rpc_stream_restored.
+  private streamLost = false;
+  /// In-flight commands keyed by response id; rejected as uncertain when a
+  /// stream gap means their response may have been lost.
+  private inFlight = new Map<string, (error: Error) => void>();
 
   readonly ctx: ProfileContext;
   private readonly manager: RustHostManager;
@@ -704,11 +756,7 @@ export class RustRpcProcess {
   private async boot(): Promise<void> {
     try {
       await this.manager.spawn(this.cwd, this.sessionId, this.extraArgs);
-      const stream = await this.manager.attach(this.sessionId, (frame) => {
-        for (const listener of this.frameListeners) listener(frame);
-      });
-      this.detach = stream.detach;
-      this.attachClosed = stream.closed;
+      await this.attachStream();
     } catch (error) {
       if (!this.exited) {
         this.exited = true;
@@ -721,6 +769,96 @@ export class RustRpcProcess {
         this.releaseHost();
         this.onExit?.({ stderrTail: error instanceof Error ? error.message : String(error) });
       }
+    }
+  }
+
+  /**
+   * Attach to the session's frame stream. When the host drops the attach
+   * stream because its sync channel overflowed (slow consumer), frames were
+   * lost: reattach without killing the child, tell listeners (rpc_stream_gap
+   * then rpc_stream_restored once the server confirms the new subscription),
+   * reject in-flight commands whose response may have been lost, and dedupe
+   * replayed frames via the session sequence.
+   */
+  private attachStream(): Promise<void> {
+    return (async () => {
+      // Bounded retries with backoff: an attach error or a missing session
+      // must never become a tight reconnect loop.
+      const MAX_ATTACH_RETRIES = 5;
+      const ATTACH_RETRY_BASE_MS = 250;
+      for (let attempt = 0; ; attempt++) {
+        if (this.exited) return;
+        // Frames already delivered live by the previous attach stream —
+        // server-side replay must not duplicate them.
+        const sinceSeq = this.lastSeqDelivered;
+        let stream: AttachStream;
+        try {
+          stream = await this.manager.attach(this.sessionId, (frame) => {
+            if (this.exited) return;
+            const seq = frame.seq;
+            if (typeof seq === "number" && seq > 0) {
+              if (seq <= this.lastSeqDelivered) return; // replayed duplicate
+              this.lastSeqDelivered = seq;
+            }
+            for (const listener of this.frameListeners) listener(frame);
+          }, {
+            sinceSeq,
+            onGap: () => this.handleStreamGap(),
+          });
+        } catch (error) {
+          if (this.exited || attempt >= MAX_ATTACH_RETRIES) {
+            throw error instanceof Error ? error : new Error(String(error));
+          }
+          await new Promise((resolve) => {
+            const timer = setTimeout(resolve, ATTACH_RETRY_BASE_MS * 2 ** attempt);
+            timer.unref?.();
+          });
+          continue;
+        }
+        this.detach = stream.detach;
+        this.attachClosed = stream.closed;
+        await stream.confirmed;
+        if (this.streamLost) {
+          // A gap was reported on the previous stream (server gap event or
+          // dropped attach) and the server has now confirmed the fresh
+          // subscription: recovery is real. Never emit rpc_stream_restored
+          // without a preceding lost-stream condition.
+          this.streamLost = false;
+          this.gapSignaled = false;
+          for (const listener of this.frameListeners) listener({ type: "rpc_stream_restored" });
+        }
+        await stream.closed;
+        if (this.exited) return;
+        // The stream closed while the session is still alive: either the
+        // attach request failed (no_such_session races with spawn) or the
+        // supervisor dropped this subscriber (full channel). Frames were
+        // lost: signal the gap, reject in-flight commands as uncertain.
+        this.streamLost = true;
+        this.handleStreamGap();
+      }
+    })();
+  }
+
+  /**
+   * The attach stream was dropped (channel overflow) while the child keeps
+   * streaming: synthetic gap frame + reject in-flight commands whose
+   * responses may have been lost — never report success, never blind-resend.
+   */
+  private handleStreamGap(): void {
+    if (this.gapSignaled) return;
+    this.gapSignaled = true;
+    for (const listener of this.frameListeners) listener({ type: "rpc_stream_gap" });
+    // Responses traveling while the stream dropped are lost or about to be:
+    // pending callers must learn the result is uncertain, not hang until
+    // timeout and not trust a success that may never have been delivered.
+    const rejecters = [...this.inFlight.values()];
+    this.inFlight.clear();
+    for (const reject of rejecters) {
+      reject(new RpcCommandError(
+        "rpc_command",
+        "rpc stream gap: response may have been lost during stream reattachment",
+        "rpc_stream_gap",
+      ));
     }
   }
 
@@ -763,6 +901,7 @@ export class RustRpcProcess {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.frameListeners.delete(onFrame);
+        this.inFlight.delete(id);
         reject(new RpcCommandTimeoutError(command.type, timeoutMs));
       }, timeoutMs);
       timer.unref?.();
@@ -770,6 +909,7 @@ export class RustRpcProcess {
         if (frame.id !== id) return;
         clearTimeout(timer);
         this.frameListeners.delete(onFrame);
+        this.inFlight.delete(id);
         if (frame.success === false) {
           reject(new RpcCommandError(command.type, String(frame.error ?? "command failed"), "command_failed"));
         } else {
@@ -777,9 +917,16 @@ export class RustRpcProcess {
         }
       };
       this.frameListeners.add(onFrame);
+      this.inFlight.set(id, (error: Error) => {
+        clearTimeout(timer);
+        this.frameListeners.delete(onFrame);
+        this.inFlight.delete(id);
+        reject(error);
+      });
       void this.manager.send(this.sessionId, { ...command, id }, timeoutMs).catch((error) => {
         clearTimeout(timer);
         this.frameListeners.delete(onFrame);
+        this.inFlight.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       });
     });

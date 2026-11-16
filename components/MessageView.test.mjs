@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile } from "node:fs/promises";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createJiti } from "jiti";
@@ -9,7 +8,7 @@ const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
   tsconfigPaths: true,
 });
-const messageViewSource = await readFile(new URL("./MessageView.tsx", import.meta.url), "utf8");
+
 const { MessageView, SafeMarkdownBody } = await jiti.import("./MessageView.tsx");
 const { CodeBlock } = await jiti.import("./MermaidBlock.tsx");
 
@@ -38,6 +37,21 @@ test("MCP mount notices stay out of the transcript", () => {
       role: "custom",
       customType: "xdev-mount-notice",
       content: "The xd:// device inventory changed.",
+      display: false,
+    },
+  }));
+
+  assert.equal(html, "");
+});
+
+test("omp's eval runtime snapshot never renders as a chat pill", () => {
+  // omp appends this hidden custom message on every child respawn and
+  // display-context rebuild, so rendering it repeats the same pill per turn.
+  const html = renderToStaticMarkup(React.createElement(MessageView, {
+    message: {
+      role: "custom",
+      customType: "eval-state-context",
+      content: "Eval runtime state is host-retained, not reconstructed from transcript text.",
       display: false,
     },
   }));
@@ -171,12 +185,6 @@ test("skill content returned by a generic grep/read call stays collapsed", () =>
   }));
 
   assert.match(html, /aria-expanded="false"/);
-});
-
-test("deferred thinking rows prefetch their body instead of relying on click-time fetch", () => {
-  // The behavior is intentionally implemented as a mount prefetch so the
-  // collapsed row never has to expose an empty shell after a user opens it.
-  assert.match(messageViewSource, /Prefetch once when the row mounts/);
 });
 
 test("streaming thinking auto-expands only while it is the latest block", () => {

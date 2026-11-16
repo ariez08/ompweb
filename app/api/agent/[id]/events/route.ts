@@ -22,6 +22,7 @@ export async function GET(
   // Hoisted so the stream's cancel() (half-open disconnects that never fire
   // the abort signal) can release the heartbeat and the RpcProcess listener.
   let streamCleanup: (() => void) | null = null;
+  let streamPull: (() => void) | null = null;
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
@@ -32,50 +33,73 @@ export async function GET(
       // Control/terminal frames are small and never dropped; they flush the
       // pending update first so ordering is preserved.
       let pendingUpdate: unknown | null = null;
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-      const flushPendingUpdate = (): boolean => {
+      // force=false (timer tick): hold the update while the queue is still
+      // full instead of enqueuing one large update every 25ms — a non-reading
+      // client would otherwise accumulate them without bound. The held update
+      // is delivered by the next pull() or control frame.
+      // pull / control frame: flush before the following terminal frame.
+      const flushPendingUpdate = (force: boolean): boolean => {
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
         const data = pendingUpdate;
         pendingUpdate = null;
         if (data === null) return true;
+        if (!force && controller.desiredSize !== null && controller.desiredSize <= 0) {
+          pendingUpdate = data;
+          return false;
+        }
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
           return true;
         } catch {
-          closed = true;
+          cleanup();
           return false;
         }
       };
+      streamPull = () => flushPendingUpdate(true);
 
       const encode = (data: unknown) => {
         if (closed) return;
         const type = (data as { type?: string } | null)?.type;
         // Coalesce while backpressured; never buffer unboundedly.
-        if (type === "message_update" && controller.desiredSize !== null && controller.desiredSize < 0) {
+        if (type === "message_update" && controller.desiredSize !== null && controller.desiredSize <= 0) {
           pendingUpdate = data;
+          if (!flushTimer) {
+            flushTimer = setTimeout(() => flushPendingUpdate(false), 25);
+          }
           return;
         }
-        if (!flushPendingUpdate()) return;
+        if (!flushPendingUpdate(true)) return;
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
         } catch {
-          closed = true;
+          cleanup();
         }
       };
 
       // Heartbeat every 30s to prevent server/proxy timeout (Next.js default ~120-150s)
       const heartbeat = setInterval(() => {
         if (closed) return;
-        if (!flushPendingUpdate()) return;
+        if (controller.desiredSize !== null && controller.desiredSize <= 0) return;
+        if (!flushPendingUpdate(true)) return;
         try {
           controller.enqueue(encoder.encode(":\n\n"));
         } catch {
-          closed = true;
+          cleanup();
         }
       }, 30_000);
 
       const cleanup = () => {
         if (closed) return;
         closed = true;
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
         clearInterval(heartbeat);
         unsubscribe?.();
         try {
@@ -103,6 +127,9 @@ export async function GET(
         encode(event);
       });
     },
+    pull() {
+      streamPull?.();
+    },
     cancel() {
       streamCleanup?.();
     },
@@ -110,8 +137,10 @@ export async function GET(
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/event-stream",
       ...PROFILE_SCOPED_HEADERS,
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
       Connection: "keep-alive",
     },
   });

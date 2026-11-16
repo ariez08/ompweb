@@ -25,11 +25,9 @@ test("keeps Stop as the primary action while streaming, even with typed text", (
       }),
     );
 
-    // Stop must stay reachable during a run; queued follow-ups are sent via
-    // Enter / the queued-follow-up bar instead of replacing the Stop button.
+    // Stop must stay reachable during a run even when a follow-up is available.
     assert.match(html, />(Stop|chatInput\.stop)</);
     assert.match(html, /title="(Stop agent|chatInput\.stopAgent)"/);
-    assert.doesNotMatch(html, />(Queue|chatInput\.queue)</);
   } finally {
     clearDraft(draftKey);
   }

@@ -19,11 +19,34 @@ export function setSessionAdvisorSpawn(sessionId: string, enabled: boolean) {
   else advisorSpawnSessions.delete(sessionId);
 }
 
+/** Tool/skill selection a lazily-spawned child must start with, per session.
+ *  Same reason as the advisor flag: the spawn happens in the route, which can
+ *  only be told through the request. `undefined` array = unrestricted. */
+const capabilitySpawnSelections = new Map<string, { tools?: string[]; skills?: string[] }>();
+
+export function setSessionCapabilitySpawn(
+  sessionId: string,
+  selection: { tools?: string[]; skills?: string[] },
+) {
+  capabilitySpawnSelections.set(sessionId, selection);
+}
+
+// `undefined` means "unrestricted" (leave omp's full toolset alone), which a
+// query string cannot express as an empty value — hence the `*` sentinel.
+const UNRESTRICTED = "*";
+
 export async function sendAgentCommand<T = unknown>(
   sessionId: string,
   command: Record<string, unknown>,
 ): Promise<T> {
-  const query = advisorSpawnSessions.has(sessionId) ? "?advisor=1" : "";
+  const params = new URLSearchParams();
+  if (advisorSpawnSessions.has(sessionId)) params.set("advisor", "1");
+  const caps = capabilitySpawnSelections.get(sessionId);
+  if (caps) {
+    params.set("tools", caps.tools === undefined ? UNRESTRICTED : caps.tools.join(","));
+    params.set("skills", caps.skills === undefined ? UNRESTRICTED : caps.skills.join(","));
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   const res = await fetch(`/api/agent/${encodeURIComponent(sessionId)}${query}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

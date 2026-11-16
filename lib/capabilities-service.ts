@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defaultProfileContext, type ProfileContext } from "./omp/profile-context";
-import { readDiscoveredMcpServers } from "./omp/mcp-config";
+import { readDiscoveredMcpServers, readProjectMcpDisabledServers } from "./omp/mcp-config";
 import { discoverSkills } from "./skills-service";
 import type {
   WorkspaceCapabilitiesCatalog,
@@ -56,7 +56,9 @@ export async function getWorkspaceCapabilitiesCatalog(
     preset: "full_agent",
     tools: undefined,
     skills: undefined,
-    disabledMcp: [],
+    // MCP is workspace-scoped: report what THIS project turns off so the picker
+    // reflects the file OMP will actually read at spawn.
+    disabledMcp: readProjectMcpDisabledServers(cwd),
   };
 
   const customPresets = listProfileCustomPresets(ctx);

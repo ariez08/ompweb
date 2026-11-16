@@ -9,7 +9,7 @@ import {
   deleteProfileCustomPreset,
   listProfileCustomPresets,
 } from "@/lib/capabilities-service";
-import { writeUserMcpDisabledServers } from "@/lib/omp/mcp-config";
+import { writeProjectMcpDisabledServers } from "@/lib/omp/mcp-config";
 import { CAPABILITY_PRESETS } from "@/lib/capabilities-types";
 import { PROFILE_SCOPED_HEADERS, requestProfileContext } from "@/lib/omp/profile-cookie";
 
@@ -44,6 +44,8 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
       cwd?: string;
+      /** Explicit opt-in to write `.omp/config.yml`; `cwd` alone only scopes MCP. */
+      saveSkillsToWorkspace?: boolean;
       capabilities?: {
         preset: string;
         tools?: string[];
@@ -78,17 +80,22 @@ export async function POST(req: Request) {
 
     // Mode 2: Apply capabilities durably.
     //
-    // MCP toggles belong in the profile's mcp.json `disabledServers`, which is
-    // the list OMP itself honours on every spawn — so they survive reloads and
-    // apply to both web and CLI sessions. Skills keep using the workspace
-    // `.omp/config.yml`, but merged (never overwritten) so unrelated settings
-    // the user put there survive.
+    // MCP toggles go to the WORKSPACE file `<project>/.omp/mcp.json` (OMP reads
+    // it at spawn and its entries win over user level), because OMP exposes no
+    // per-session MCP switch. Writing the profile's `disabledServers` instead
+    // would leak one chat's choice into every other project. Skills keep using
+    // the workspace `.omp/config.yml`, but merged (never overwritten) so
+    // unrelated settings the user put there survive.
     const mcp = body.capabilities?.disabledMcp
-      ? writeUserMcpDisabledServers(body.capabilities.disabledMcp, ctx)
+      ? (body.cwd && existsSync(body.cwd)
+        ? writeProjectMcpDisabledServers(body.cwd, body.capabilities.disabledMcp)
+        : null)
       : null;
 
     let configPath: string | null = null;
-    if (body.cwd && existsSync(body.cwd)) {
+    // Skills only touch `.omp/config.yml` when the user opted into a workspace
+    // default; `cwd` alone now rides along on every change for the MCP write.
+    if (body.saveSkillsToWorkspace && body.cwd && existsSync(body.cwd)) {
       const ompDir = join(body.cwd, ".omp");
       const target = join(ompDir, "config.yml");
       const skillsEnabled = body.capabilities?.preset === "chat_only"

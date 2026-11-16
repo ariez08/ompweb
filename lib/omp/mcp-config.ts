@@ -466,35 +466,80 @@ export function writeUserMcpServer(
 }
 
 /**
- * Persist which MCP servers are switched off in the user-level config.
- * OMP reads `disabledServers` from this file on every spawn, so the choice
- * survives reloads and applies to both web and CLI sessions.
+ * Persist which MCP servers a WORKSPACE switches off, in `<project>/.omp/mcp.json`.
+ *
+ * Scope note: OMP has no per-session MCP switch — only a per-file denylist read
+ * at spawn. The project file is the closest thing to per-session the format
+ * allows, because every chat having its cwd in this project shares it while
+ * other projects are unaffected.
+ *
+ * OMP suppresses a project entry whose `enabled` is false, and a project entry
+ * claims its name before the user-level file, so writing `{enabled:false}` under
+ * `mcpServers` disables a server defined at user level without duplicating its
+ * command/url. Servers the user re-enables are REMOVED from this file (not
+ * written back as `enabled:true`), which would otherwise pin the server's
+ * definition to the project and shadow later user-level edits.
  */
-export function writeUserMcpDisabledServers(
+export function writeProjectMcpDisabledServers(
+  cwd: string,
   disabled: string[],
-  ctx: ProfileContext = defaultProfileContext(),
 ): { path: string; disabledServers: string[] } {
-  const userPath = join(ctx.agentDir, "mcp.json");
+  const root = projectRoot(cwd);
+  const target = join(root, ".omp", "mcp.json");
   const normalized = [...new Set(disabled.filter((name) => SERVER_NAME.test(name)))].sort((a, b) => a.localeCompare(b));
-  return withMcpConfigLock(userPath, () => {
-    let currentConfig: McpFile = {};
-    if (existsSync(userPath)) {
+  return withMcpConfigLock(target, () => {
+    let current: McpFile = {};
+    if (existsSync(target)) {
       try {
-        const parsed = JSON.parse(readFileSync(userPath, "utf8"));
-        if (isRecord(parsed)) currentConfig = parsed as McpFile;
-      } catch {}
+        const parsed: unknown = JSON.parse(readFileSync(target, "utf8"));
+        if (isRecord(parsed)) current = parsed as McpFile;
+      } catch {
+        // Refuse to clobber a hand-written file we cannot parse.
+        throw new Error(`${target} is not valid JSON`);
+      }
     }
-    const config: McpFile = { ...currentConfig };
-    if (normalized.length > 0) config.disabledServers = normalized;
-    else delete config.disabledServers;
-    mkdirSync(dirname(userPath), { recursive: true });
-    const temp = `${userPath}.tmp-${process.pid}-${Date.now()}`;
+    const servers = isRecord(current.mcpServers) ? { ...current.mcpServers } : {};
+    // Only entries this writer owns are touched: a server with a real
+    // definition in this file is the user's own and keeps its own `enabled`.
+    const ownsEntry = (name: string): boolean => {
+      const entry = servers[name];
+      return isRecord(entry) && Object.keys(entry).every((key) => key === "enabled") && entry.enabled === false;
+    };
+    for (const name of normalized) {
+      if (!servers[name]) servers[name] = { enabled: false };
+    }
+    for (const name of Object.keys(servers)) {
+      if (!normalized.includes(name) && ownsEntry(name)) delete servers[name];
+    }
+    const config: McpFile = { ...current };
+    if (Object.keys(servers).length > 0) config.mcpServers = servers;
+    else delete config.mcpServers;
+    if (Object.keys(config).length === 0) {
+      if (existsSync(target)) unlinkSync(target);
+      return { path: target, disabledServers: normalized };
+    }
+    mkdirSync(dirname(target), { recursive: true });
+    const temp = `${target}.tmp-${process.pid}-${Date.now()}`;
     try {
       writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-      renameSync(temp, userPath);
+      renameSync(temp, target);
     } finally {
       try { unlinkSync(temp); } catch {}
     }
-    return { path: userPath, disabledServers: normalized };
+    return { path: target, disabledServers: normalized };
   });
 }
+
+/** MCP servers a workspace switches off, read back from `<project>/.omp/mcp.json`. */
+export function readProjectMcpDisabledServers(cwd: string): string[] {
+  const target = join(projectRoot(cwd), ".omp", "mcp.json");
+  if (!existsSync(target)) return [];
+  const config = readMcpUserConfig(target);
+  return config.servers
+    .filter((server) => {
+      const entry = server.config;
+      return isRecord(entry) && entry.enabled === false && Object.keys(entry).every((key) => key === "enabled");
+    })
+    .map((server) => server.name);
+}
+

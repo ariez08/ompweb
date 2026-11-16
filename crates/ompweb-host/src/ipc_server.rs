@@ -517,9 +517,12 @@ mod tests {
         let mut response = String::new();
         reader.read_line(&mut response).unwrap();
         assert!(response.contains("frame_too_large"), "{response}");
-        // Server closed: further reads hit EOF.
+        // Windows may reset a socket closed with unread incoming bytes.
         let mut rest = String::new();
-        let n = reader.read_to_string(&mut rest).unwrap();
-        assert_eq!(n, 0, "connection must be closed after an oversized frame");
+        match reader.read_to_string(&mut rest) {
+            Ok(n) => assert_eq!(n, 0, "connection must be closed after an oversized frame"),
+            Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset => {}
+            Err(err) => panic!("unexpected read error after oversized frame: {err}"),
+        }
     }
 }

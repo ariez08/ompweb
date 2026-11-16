@@ -17,23 +17,13 @@ export async function GET(
     // below would 404 a brand-new running session.
     const rpc = getRpcSession(id, ctx);
     if (rpc?.isAlive()) {
+      const cliLock = await findCliSessionLock(id);
       try {
-        const statePromise = rpc.send({ type: "get_state" }) as Promise<{ isPromptRunning?: boolean; isStreaming?: boolean; isBashRunning?: boolean } | undefined>;
-        const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("state_timeout")), 2500));
-        const state = await Promise.race([statePromise, timeoutPromise]);
-        const fileActive = await isExternallyActive(id, 5000, ctx);
-        const cliLock = await findCliSessionLock(id);
-        const rpcRunning = Boolean(state?.isPromptRunning || state?.isStreaming || state?.isBashRunning);
-        if (fileActive && !rpcRunning) {
-          return NextResponse.json({
-            running: true,
-            external: true,
-            webActive: false,
-            cliLocked: Boolean(cliLock),
-            cliLockPid: cliLock?.pid,
-            state: null,
-          }, { headers: { ...PROFILE_SCOPED_HEADERS } });
-        }
+        const state = await rpc.send(
+          { type: "get_state" },
+          { stateTimeoutMs: 1000, propagateStateTimeout: true },
+        ) as { isPromptRunning?: boolean; isStreaming?: boolean; isBashRunning?: boolean; isCompacting?: boolean } | undefined;
+        const rpcRunning = Boolean(state?.isPromptRunning || state?.isStreaming || state?.isBashRunning || state?.isCompacting);
         return NextResponse.json({
           running: rpcRunning,
           webActive: true,
@@ -42,8 +32,16 @@ export async function GET(
           state,
         }, { headers: { ...PROFILE_SCOPED_HEADERS } });
       } catch {
-        // RPC unavailable (e.g. the external CLI took over the session) —
-        // fall through to file-based mode below.
+        // A cached snapshot cannot prove the child has become idle.
+        const rpcRunning = rpc.isRunning();
+        return NextResponse.json({
+          running: rpcRunning,
+          webActive: true,
+          stale: true,
+          cliLocked: Boolean(cliLock),
+          cliLockPid: cliLock?.pid,
+          state: rpc.getCachedWebState(),
+        }, { headers: { ...PROFILE_SCOPED_HEADERS } });
       }
     }
 
