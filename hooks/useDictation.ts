@@ -733,13 +733,6 @@ export function useDictation({ onTranscript, onError, scope, identityMove }: Use
       return;
     }
     try {
-      const permission = navigator.permissions?.query
-        ? await navigator.permissions.query({ name: "microphone" as PermissionName })
-        : null;
-      if (permission?.state === "denied") {
-        onError?.("Microphone access denied");
-        return;
-      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 

@@ -23,6 +23,7 @@ import { RightWorkbench, type WorkbenchView } from "./panels/RightWorkbench";
 import { PanelErrorBoundary } from "./panels/PanelErrorBoundary";
 import { AgentsPanel } from "./agents/AgentsPanel";
 import { JobsPanel } from "./panels/JobsPanel";
+import { TurnChangesPanel } from "./TurnChangesPanel";
 import { FileExplorer } from "./FileExplorer";
 import { SubagentDetailPanel } from "./agents/SubagentDetailPanel";
 import { useTheme } from "@/hooks/useTheme";
@@ -41,6 +42,7 @@ import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo, GenerationSpeedInfo } from "@/lib/pi-types";
 import type { SubagentInfo } from "@/hooks/useAgentSession";
 import type { BackgroundJob } from "@/lib/background-jobs";
+import type { TurnChangeTurn } from "@/lib/turn-changes";
 import type { SettingsTab } from "./SettingsTabs";
 import type { Selection } from "./ModelsConfig";
 import { SettingsConfig } from "./SettingsConfig";
@@ -281,6 +283,10 @@ export function AppShell() {
   }, [rightPanelWidth, rightPanelResizing]);
   // Live subagent roster lifted from the active ChatWindow (session-scoped).
   const [subagents, setSubagents] = useState<SubagentInfo[] | null>(null);
+  const [turnChanges, setTurnChanges] = useState<{ sessionId: string | null; turns: TurnChangeTurn[] } | null>(null);
+  const handleTurnChangesChange = useCallback((turns: TurnChangeTurn[] | null) => {
+    setTurnChanges(turns ? { sessionId: selectedSession?.id ?? null, turns } : null);
+  }, [selectedSession?.id]);
   const [backgroundJobs, setBackgroundJobs] = useState<{ sessionId: string | null; jobs: BackgroundJob[]; error: string | null; connected: boolean; revision: number } | null>(null);
   const navigateToolCallRef = useRef<((toolCallId: string) => boolean) | null>(null);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentInfo | null>(null);
@@ -2260,6 +2266,7 @@ export function AppShell() {
               thinkingDisplayMode={thinkingDisplayMode}
               onOpenPlan={() => selectedSession && handleOpenPlan(selectedSession.id)}
               onSubagentsChange={setSubagents}
+              onTurnChangesChange={handleTurnChangesChange}
               onBackgroundJobsChange={setBackgroundJobs}
               onNavigateToolCallReady={(navigate) => { navigateToolCallRef.current = navigate; }}
               onSessionLockChange={setSessionLockState}
@@ -2423,6 +2430,11 @@ export function AppShell() {
             jobs={(
               <PanelErrorBoundary title={t("rightWorkbench.jobs")} unavailable={t("rightPanel.unavailable")} retryLabel={t("rightPanel.retry")}>
                 <JobsPanel jobs={backgroundJobs && selectedSession && backgroundJobs.sessionId === selectedSession.id ? backgroundJobs.jobs : null} connected={Boolean(backgroundJobs && selectedSession && backgroundJobs.sessionId === selectedSession.id && backgroundJobs.connected)} revision={backgroundJobs && selectedSession && backgroundJobs.sessionId === selectedSession.id ? backgroundJobs.revision : 0} sessionId={selectedSession?.id ?? null} error={backgroundJobs && selectedSession && backgroundJobs.sessionId === selectedSession.id ? backgroundJobs.error : null} onNavigateSource={(toolCallId) => navigateToolCallRef.current?.(toolCallId) ?? false} />
+              </PanelErrorBoundary>
+            )}
+            changes={(
+              <PanelErrorBoundary title={t("rightWorkbench.changes")} unavailable={t("rightPanel.unavailable")} retryLabel={t("rightPanel.retry")}>
+                <TurnChangesPanel turns={turnChanges && selectedSession && turnChanges.sessionId === selectedSession.id ? turnChanges.turns : []} sessionId={selectedSession?.id ?? null} />
               </PanelErrorBoundary>
             )}
           />

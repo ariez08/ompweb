@@ -1119,7 +1119,7 @@ function PairedDiffResult({ diff }: { diff: ResultDiff }) {
   );
 }
 
-function SplitPatchView({ text }: { text: string }) {
+export function SplitPatchView({ text }: { text: string }) {
   const { t } = useI18n();
   const allFiles = useMemo(() => parseUnifiedPatch(text), [text]);
   if (!allFiles) return <PatchTextView text={text} />;

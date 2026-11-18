@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Bot, Columns2, ExternalLink, Files, Globe2, ListChecks, MessageCircle, Plus, Search, Split, X } from "lucide-react";
+import { Bot, Columns2, ExternalLink, FileDiff, Files, Globe2, ListChecks, MessageCircle, Plus, Search, Split, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { createTemporarySession, fetchBrowserPreview } from "@/lib/workbench-client";
 
-export type WorkbenchView = "files" | "agents" | "jobs" | "sidechat" | "browser";
+export type WorkbenchView = "files" | "agents" | "jobs" | "sidechat" | "browser" | "changes";
 // The workbench intentionally has one axis only.  A second axis (or a
 // draggable dock) made the right rail feel like a nested window manager and
 // was especially confusing on small screens.  The sole split is upper/lower.
@@ -22,6 +22,7 @@ const VIEW_META: Record<WorkbenchView, { icon: typeof Files | null; labelKey: st
   jobs: { icon: ListChecks, labelKey: "rightWorkbench.jobs", hintKey: "rightWorkbench.jobsHint" },
   sidechat: { icon: MessageCircle, labelKey: "rightWorkbench.sideChat", hintKey: "rightWorkbench.sideChatActionHint" },
   browser: { icon: Globe2, labelKey: "rightWorkbench.browser", hintKey: "rightWorkbench.browserActionHint" },
+  changes: { icon: FileDiff, labelKey: "rightWorkbench.changes", hintKey: "rightWorkbench.changesHint" },
 };
 
 function emptyLayout(): Layout {
@@ -33,7 +34,7 @@ function normalizeLayout(value: unknown): Layout {
   const candidate = value as Partial<Layout>;
   const panes = Array.isArray(candidate.panes) ? candidate.panes.slice(0, 2).map((pane, index) => {
     const source = pane as Partial<Pane>;
-    const tabs = Array.isArray(source.tabs) ? source.tabs.filter((tab): tab is WorkbenchView => tab === "files" || tab === "agents" || tab === "jobs" || tab === "sidechat" || tab === "browser") : [];
+    const tabs = Array.isArray(source.tabs) ? source.tabs.filter((tab): tab is WorkbenchView => tab === "files" || tab === "agents" || tab === "jobs" || tab === "sidechat" || tab === "browser" || tab === "changes") : [];
     const active = tabs.includes(source.active as WorkbenchView) ? source.active as WorkbenchView : tabs[0] ?? null;
     return { id: typeof source.id === "string" ? source.id : `pane-${index + 1}`, tabs: [...new Set(tabs)], active };
   }) : [];
@@ -161,12 +162,14 @@ export function RightWorkbench({
   agents,
   requestedView,
   jobs,
+  changes,
 }: {
   storageKey?: string;
   cwd: string | null;
   files: ReactNode;
   agents: ReactNode;
   jobs: ReactNode;
+  changes: ReactNode;
   requestedView?: { view: WorkbenchView; nonce: number } | null;
 }) {
   const { t } = useI18n();
@@ -227,11 +230,12 @@ export function RightWorkbench({
     if (view === "files") return files;
     if (view === "agents") return agents;
     if (view === "jobs") return jobs;
+    if (view === "changes") return changes;
     if (view === "sidechat") return <SideChatView cwd={cwd} />;
     return <BrowserView />;
-  }, [agents, cwd, files, jobs]);
+  }, [agents, changes, cwd, files, jobs]);
 
-  const actions = useMemo(() => ["files", "agents", "jobs", "sidechat", "browser"] as WorkbenchView[], []);
+  const actions = useMemo(() => ["files", "agents", "jobs", "sidechat", "browser", "changes"] as WorkbenchView[], []);
   const emptyActions = actions;
 
   const updateMenuPosition = useCallback(() => {
@@ -240,7 +244,7 @@ export function RightWorkbench({
     // Fixed positioning follows the exact clicked button while the clamps
     // keep the menu reachable at the viewport edges.
     const menuWidth = 166;
-    const menuHeight = 230;
+    const menuHeight = 270;
     setMenuPosition({
       left: Math.max(6, Math.min(rect.left, window.innerWidth - menuWidth - 6)),
       top: Math.max(6, Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 6)),

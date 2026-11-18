@@ -18,6 +18,7 @@ import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo, GenerationSpeedInfo } from "@/lib/pi-types";
+import { collectTurnChanges, type TurnChangeTurn } from "@/lib/turn-changes";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
 import { resolveAvailableThinkingLevels } from "@/lib/thinking-levels";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
@@ -57,6 +58,7 @@ interface Props {
    *  Called with the latest roster array reference on every change and with
    *  null when this session view unmounts (session switch). */
   onSubagentsChange?: (roster: SubagentInfo[] | null) => void;
+  onTurnChangesChange?: (turns: TurnChangeTurn[] | null) => void;
   onBackgroundJobsChange?: (value: { sessionId: string | null; jobs: BackgroundJob[]; error: string | null; connected: boolean; revision: number } | null) => void;
   onNavigateToolCallReady?: (navigate: ((toolCallId: string) => boolean) | null) => void;
   onSessionLockChange?: (info: { kind: "cli" | "web" | "idle"; pid?: number | null }) => void;
@@ -832,7 +834,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
     </>
   );
 });
-export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onModelCapacityChange, onGenerationSpeedChange, onOpenFile, onOpenPlan, onSubagentsChange, onBackgroundJobsChange, onNavigateToolCallReady, onSessionLockChange }: Props) {
+export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed = true, thinkingDisplayMode = "auto", onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onModelCapacityChange, onGenerationSpeedChange, onOpenFile, onOpenPlan, onSubagentsChange, onTurnChangesChange, onBackgroundJobsChange, onNavigateToolCallReady, onSessionLockChange }: Props) {
   const { t, tn } = useI18n();
   const isMobile = useIsMobile();
   // The minimap sits over the transcript's right edge on desktop. Reserve its
@@ -887,6 +889,9 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsPanelOpen,
     onOpenFile,
   });
+  const turnChanges = useMemo(() => collectTurnChanges(messages, entryIds), [messages, entryIds]);
+  useEffect(() => { onTurnChangesChange?.(turnChanges); }, [onTurnChangesChange, turnChanges]);
+  useEffect(() => () => { onTurnChangesChange?.(null); }, [onTurnChangesChange]);
   const sessionBusy = agentRunning || bashRunning;
   const modelCapacity = useMemo(() => {
     if (!displayModelValue) return null;

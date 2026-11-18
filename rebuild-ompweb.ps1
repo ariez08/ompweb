@@ -75,44 +75,61 @@ try {
 
 Write-Warning 'Applying restarts ompweb and may terminate active sessions, terminals, and background jobs. Run this script from a separate PowerShell window.'
 if ((Read-Host 'Apply this build now? [y/N]') -notmatch '^(?i:y|yes)$') { Write-Host "Cancelled. Staged build: $stage"; return }
-$previousBuildId = (Get-Content -LiteralPath (Join-Path $live 'BUILD_ID') -Raw).Trim()
-if (-not $previousBuildId -or $previousBuildId -eq $buildId) { throw 'The new BUILD_ID is empty or matches the currently installed build; nothing was stopped.' }
-Write-Host "Previous BUILD_ID=$previousBuildId"
+$liveBuildIdPath = Join-Path $live 'BUILD_ID'
+$previousBuildId = if (Test-Path -LiteralPath $liveBuildIdPath) { (Get-Content -LiteralPath $liveBuildIdPath -Raw).Trim() } else { $null }
+if ($previousBuildId -and $previousBuildId -eq $buildId) { Write-Warning 'The staged BUILD_ID matches the installed build; it will be reinstalled/restarted if needed.' }
+if ($previousBuildId) { Write-Host "Previous BUILD_ID=$previousBuildId" } else { Write-Host 'Previous BUILD_ID=(none; first install)' }
 Write-Host "New BUILD_ID=$buildId"
 if (Get-NetTCPConnection -LocalPort 30178 -State Listen -ErrorAction SilentlyContinue) { throw 'Development server port 30178 is in use; stop it before replacing the shared .next directory.' }
 $owners = @(Get-NetTCPConnection -LocalPort 30177 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
-if ($owners.Count -ne 1) { throw 'Expected exactly one owner for port 30177; nothing was stopped.' }
-$owner = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $owners[0]) -ErrorAction Stop
-$parent = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $owner.ParentProcessId) -ErrorAction SilentlyContinue
+$owner = $null
+$parent = $null
+$launcherParentId = $null
+if ($owners.Count -gt 1) { throw "Expected zero or one owner for port 30177; found $($owners.Count)." }
+if ($owners.Count -eq 1) {
+    $owner = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $owners[0]) -ErrorAction Stop
+    $parent = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $owner.ParentProcessId) -ErrorAction SilentlyContinue
+}
 $cliPreloadPath = [regex]::Escape((Join-Path $repo 'bin\request-peer-preload.js'))
 $cliNextPath = [regex]::Escape((Join-Path $repo 'node_modules\next\dist\bin\next'))
 $cliWrapperPath = [regex]::Escape((Join-Path $repo 'bin\omp-web.js'))
-$isExpectedCli = $owner.Name -eq 'node.exe' -and
-    $owner.CommandLine -match $cliPreloadPath -and
-    $owner.CommandLine -match $cliNextPath -and
-    $owner.CommandLine -match '(?i)\bstart\s+-p\s+30177\b' -and
-    $parent -and $parent.Name -eq 'node.exe' -and
-    $parent.CommandLine -match $cliWrapperPath -and
-    $parent.CommandLine -match '(?i)--port\s+30177\b'
-if (-not $isExpectedCli) { throw 'Port owner is not the expected ompweb CLI process; nothing was stopped.' }
 $launcherCmd = Join-Path $env:LOCALAPPDATA 'ompweb\start-ompweb.cmd'
-$launcherParentId = if ($parent -and $parent.Name -eq 'cmd.exe' -and $parent.CommandLine -and $parent.CommandLine.Contains($launcherCmd)) { $parent.ProcessId } else { $null }
+if ($owners.Count -eq 1) {
+    $isExpectedCli = $owner.Name -eq 'node.exe' -and
+        $owner.CommandLine -match $cliPreloadPath -and
+        $owner.CommandLine -match $cliNextPath -and
+        $owner.CommandLine -match '(?i)\bstart\s+-p\s+30177\b' -and
+        $parent -and $parent.Name -eq 'node.exe' -and
+        $parent.CommandLine -match $cliWrapperPath -and
+        $parent.CommandLine -match '(?i)--port\s+30177\b'
+    if (-not $isExpectedCli) { throw 'Port 30177 is occupied by a non-ompweb process; nothing was stopped.' }
+    $launcherParentId = if ($parent -and $parent.Name -eq 'cmd.exe' -and $parent.CommandLine -and $parent.CommandLine.Contains($launcherCmd)) { $parent.ProcessId } else { $null }
+    Write-Host "Existing ompweb process detected (PID=$($owners[0])); it will be restarted."
+} else {
+    Write-Host 'No ompweb process is listening on port 30177; the new process will be started after installation.'
+}
 
 $stopped = $false
 $launched = $false
 try {
-    Stop-Process -Id $owners[0] -Force -ErrorAction Stop
-    $stopped = $true
-    if ($launcherParentId) {
-        $parent = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $launcherParentId) -ErrorAction SilentlyContinue
-        if ($parent -and $parent.Name -eq 'cmd.exe' -and $parent.CommandLine -and $parent.CommandLine.Contains($launcherCmd)) {
-            Stop-Process -Id $launcherParentId -Force -ErrorAction Stop
+    if ($owners.Count -eq 1) {
+        Stop-Process -Id $owners[0] -Force -ErrorAction Stop
+        $stopped = $true
+        if ($launcherParentId) {
+            $parent = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $launcherParentId) -ErrorAction SilentlyContinue
+            if ($parent -and $parent.Name -eq 'cmd.exe' -and $parent.CommandLine -and $parent.CommandLine.Contains($launcherCmd)) {
+                Stop-Process -Id $launcherParentId -Force -ErrorAction Stop
+            }
         }
+        Start-Sleep -Seconds 2
     }
-    Start-Sleep -Seconds 2
-    $backup = Join-Path $env:TEMP ('ompweb-next-old-' + [guid]::NewGuid().ToString('N'))
-    $backupBuild = Join-Path $backup '.next'
-    New-Item -ItemType Directory -Path $backup -ErrorAction Stop | Out-Null
+    if (Test-Path -LiteralPath $live) {
+        $backup = Join-Path $env:TEMP ('ompweb-next-old-' + [guid]::NewGuid().ToString('N'))
+        $backupBuild = Join-Path $backup '.next'
+        New-Item -ItemType Directory -Path $backup -ErrorAction Stop | Out-Null
+    } else {
+        Write-Host 'No existing .next build found; installing as a fresh build.'
+    }
     $installOk = $false
     $attempt = 0
     while (-not $installOk) {
@@ -125,17 +142,17 @@ try {
                 Copy-Item -LiteralPath $item.FullName -Destination $candidate -Recurse -Force -ErrorAction Stop
             }
             if ((Get-Content -LiteralPath (Join-Path $candidate 'BUILD_ID') -Raw).Trim() -ne $buildId) { throw 'Copied build candidate has the wrong BUILD_ID.' }
-            Move-Item -LiteralPath $live -Destination $backupBuild -ErrorAction Stop
+            if (Test-Path -LiteralPath $live) { Move-Item -LiteralPath $live -Destination $backupBuild -ErrorAction Stop }
             Move-Item -LiteralPath $candidate -Destination $live -ErrorAction Stop
             if ((Get-Content -LiteralPath (Join-Path $live 'BUILD_ID') -Raw).Trim() -ne $buildId) { throw 'Installed BUILD_ID does not match the staged build.' }
             $installOk = $true
             break
         } catch {
             $installError = $_.Exception.Message
-            if ((Test-Path -LiteralPath $live) -and (Test-Path -LiteralPath $backupBuild)) {
+            if ($backupBuild -and (Test-Path -LiteralPath $live) -and (Test-Path -LiteralPath $backupBuild)) {
                 Move-Item -LiteralPath $live -Destination $failedPath -ErrorAction Stop
             }
-            if ((Test-Path -LiteralPath $backupBuild) -and -not (Test-Path -LiteralPath $live)) {
+            if ($backupBuild -and (Test-Path -LiteralPath $backupBuild) -and -not (Test-Path -LiteralPath $live)) {
                 Move-Item -LiteralPath $backupBuild -Destination $live -ErrorAction Stop
             }
             if (Test-Path -LiteralPath $candidate) {
@@ -150,7 +167,7 @@ try {
     $launched = $true
     Start-Sleep -Seconds 8
     $finalId = (Get-Content -LiteralPath (Join-Path $live 'BUILD_ID') -Raw).Trim()
-    if ($finalId -ne $buildId -or $finalId -eq $previousBuildId) { throw 'Installed BUILD_ID does not match the staged build.' }
+    if ($finalId -ne $buildId) { throw 'Installed BUILD_ID does not match the staged build.' }
     $liveOwners = @(Get-NetTCPConnection -LocalPort 30177 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
     if ($liveOwners.Count -ne 1) { throw 'Build is installed, but the expected server is not listening on port 30177.' }
     $liveOwner = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $liveOwners[0]) -ErrorAction Stop

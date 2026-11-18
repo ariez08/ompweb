@@ -85,7 +85,7 @@ interface Props {
   advisorModel?: { name: string; reasoning: string | null } | null;
   /** Compact the session context from the composer toolbar. */
   onCompact?: () => void;
-  /** Remove one queued message from the queue panel (Edit/Delete/Steer). */
+  /** Remove one queued message from the local queue panel mirror. */
   onRemoveQueuedMessage?: (text: string) => void;
   /** Relabel the first queued follow-up as a steering message. */
   onPromoteQueuedToSteer?: (text: string) => void;
@@ -1269,8 +1269,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
 
   // ── Queued follow-up bar ────────────────────────────────────────────────
   // omp reports only a queued count over RPC; the texts are tracked in a
-  // client-side mirror, so Edit/Delete/Steer act on that mirror through the
-  // session hook's helpers.
+  // client-side mirror, so queue panel actions only affect the mirror; omp
+  // still owns delivery of messages it has already accepted.
   const queuedEntries = [
     ...(queuedMessages?.followUp ?? []).map((text) => ({ kind: "follow-up" as const, text })),
     ...(queuedMessages?.steering ?? []).map((text) => ({ kind: "steer" as const, text })),
@@ -1279,22 +1279,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const queuedCount = queuedEntries.length;
 
   const [queueExpanded, setQueueExpanded] = useState(false);
-
-  const handleItemEdit = useCallback((text: string) => {
-    onRemoveQueuedMessage?.(text);
-    setValue(text);
-    setAtQuery(null);
-    setSlashMatch(null);
-    setHistoryMenuOpen(false);
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (!ta) return;
-      ta.focus();
-      ta.setSelectionRange(text.length, text.length);
-      ta.style.height = "auto";
-      ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
-    });
-  }, [onRemoveQueuedMessage]);
 
   const handleItemDelete = useCallback((text: string) => {
     onRemoveQueuedMessage?.(text);
@@ -1305,11 +1289,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       onPromoteQueuedToSteer?.(entry.text);
     }
   }, [onPromoteQueuedToSteer]);
-
-  const handleQueuedEdit = useCallback(() => {
-    if (!firstQueued) return;
-    handleItemEdit(firstQueued.text);
-  }, [firstQueued, handleItemEdit]);
 
   const handleQueuedDelete = useCallback(() => {
     if (!firstQueued) return;
@@ -2223,9 +2202,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 >
                   {firstQueued?.text}
                 </span>
-                <QueuedActionButton onClick={handleQueuedEdit} title={t("chatInput.queuedEditTitle")}>
-                  {t("chatInput.queuedEdit")}
-                </QueuedActionButton>
                 <QueuedActionButton onClick={handleQueuedDelete} title={t("chatInput.queuedDeleteTitle")}>
                   {t("chatInput.queuedDelete")}
                 </QueuedActionButton>
@@ -2363,9 +2339,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                         >
                           {entry.text}
                         </span>
-                        <QueuedActionButton onClick={() => handleItemEdit(entry.text)} title={t("chatInput.queuedEditTitle")}>
-                          {t("chatInput.queuedEdit")}
-                        </QueuedActionButton>
                         <QueuedActionButton onClick={() => handleItemDelete(entry.text)} title={t("chatInput.queuedDeleteTitle")}>
                           {t("chatInput.queuedDelete")}
                         </QueuedActionButton>
