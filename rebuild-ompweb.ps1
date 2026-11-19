@@ -102,9 +102,25 @@ if ($owners.Count -eq 1) {
         $parent -and $parent.Name -eq 'node.exe' -and
         $parent.CommandLine -match $cliWrapperPath -and
         $parent.CommandLine -match '(?i)--port\s+30177\b'
-    if (-not $isExpectedCli) { throw 'Port 30177 is occupied by a non-ompweb process; nothing was stopped.' }
-    $launcherParentId = if ($parent -and $parent.Name -eq 'cmd.exe' -and $parent.CommandLine -and $parent.CommandLine.Contains($launcherCmd)) { $parent.ProcessId } else { $null }
-    Write-Host "Existing ompweb process detected (PID=$($owners[0])); it will be restarted."
+    $servesInstalledBuild = $false
+    if ($previousBuildId) {
+        try {
+            $login = Invoke-WebRequest -Uri 'http://127.0.0.1:30177/login' -UseBasicParsing -TimeoutSec 3
+            $manifest = Invoke-WebRequest -Uri ("http://127.0.0.1:30177/_next/static/$previousBuildId/_buildManifest.js") -UseBasicParsing -TimeoutSec 3
+            $servesInstalledBuild = $login.StatusCode -eq 200 -and $manifest.StatusCode -eq 200
+        } catch {}
+    }
+    if (-not $isExpectedCli -and -not $servesInstalledBuild) {
+        $ownerDetails = "$($owner.Name) PID=$($owner.ProcessId)"
+        if ($owner.CommandLine) { $ownerDetails += "`n$($owner.CommandLine)" }
+        if ((Read-Host "Port 30177 is owned by an unrecognized process:`n$ownerDetails`nStop it and replace it with ompweb? [y/N]") -notmatch '^(?i:y|yes)$') {
+            throw 'Port 30177 is occupied by an unrecognized process; nothing was stopped.'
+        }
+        Write-Host "Replacement confirmed for PID=$($owner.ProcessId)."
+    } else {
+        $launcherParentId = if ($parent -and $parent.Name -eq 'cmd.exe' -and $parent.CommandLine -and $parent.CommandLine.Contains($launcherCmd)) { $parent.ProcessId } else { $null }
+        Write-Host "Existing ompweb process detected (PID=$($owners[0])); it will be restarted."
+    }
 } else {
     Write-Host 'No ompweb process is listening on port 30177; the new process will be started after installation.'
 }
@@ -170,16 +186,6 @@ try {
     if ($finalId -ne $buildId) { throw 'Installed BUILD_ID does not match the staged build.' }
     $liveOwners = @(Get-NetTCPConnection -LocalPort 30177 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
     if ($liveOwners.Count -ne 1) { throw 'Build is installed, but the expected server is not listening on port 30177.' }
-    $liveOwner = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $liveOwners[0]) -ErrorAction Stop
-    $liveParent = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $liveOwner.ParentProcessId) -ErrorAction SilentlyContinue
-    $isLiveCli = $liveOwner.Name -eq 'node.exe' -and
-        $liveOwner.CommandLine -match $cliPreloadPath -and
-        $liveOwner.CommandLine -match $cliNextPath -and
-        $liveOwner.CommandLine -match '(?i)\bstart\s+-p\s+30177\b' -and
-        $liveParent -and $liveParent.Name -eq 'node.exe' -and
-        $liveParent.CommandLine -match $cliWrapperPath -and
-        $liveParent.CommandLine -match '(?i)--port\s+30177\b'
-    if (-not $isLiveCli) { throw 'Build is installed, but port 30177 is not owned by the expected ompweb CLI process.' }
     try {
         $login = Invoke-WebRequest -Uri 'http://127.0.0.1:30177/login' -UseBasicParsing -TimeoutSec 10
         $manifest = Invoke-WebRequest -Uri ("http://127.0.0.1:30177/_next/static/$buildId/_buildManifest.js") -UseBasicParsing -TimeoutSec 10
